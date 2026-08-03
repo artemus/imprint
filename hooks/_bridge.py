@@ -43,7 +43,7 @@ def _stop_capture_was_lost(action: str) -> bool:
 
 
 def _failure(action: str, error: str, *, stop_hook_active: bool = False,
-             capture_was_lost: bool = False) -> int:
+             capture_was_lost: bool = False, detail: str | None = None) -> int:
     """Block Stop once unless durable spool publication is positively known."""
     body = {
         "hook_schema_version": "1.0.0",
@@ -54,6 +54,8 @@ def _failure(action: str, error: str, *, stop_hook_active: bool = False,
             else "fail_open"
         ),
     }
+    if detail:
+        body["error_detail"] = detail
     if action != "stop-capture":
         body["hookSpecificOutput"] = {
             "hookEventName": _EVENT_NAMES[action],
@@ -61,7 +63,10 @@ def _failure(action: str, error: str, *, stop_hook_active: bool = False,
         }
     print(json.dumps(body, sort_keys=True))
     if action == "stop-capture":
-        print(f"Imprint Stop capture failed: {error}", file=sys.stderr)
+        message = f"Imprint Stop capture failed: {error}"
+        if detail:
+            message += f" ({detail[:300]})"
+        print(message, file=sys.stderr)
         return 2 if capture_was_lost and not stop_hook_active else 0
     return 0
 
@@ -168,6 +173,7 @@ def run(action: str) -> int:
             os.environ["IMPRINT_DEFER_DELIVERY_COMMIT"] = prior_defer
     if process.returncode:
         error_code = None
+        detail = None
         if action == "stop-capture" and process.stdout:
             try:
                 failed_body = json.loads(process.stdout)
@@ -175,6 +181,11 @@ def run(action: str) -> int:
                 failed_body = None
             if isinstance(failed_body, dict):
                 error_code = failed_body.get("error_code")
+                if failed_body.get("error"):
+                    error_type = failed_body.get("error_type") or "Error"
+                    detail = f"{error_type}: {failed_body['error']}"
+        if detail is None and process.stderr:
+            detail = process.stderr.strip()[:300] or None
         return _failure(
             action, str(error_code or "hook_action_failed"),
             stop_hook_active=stop_hook_active,
@@ -182,6 +193,7 @@ def run(action: str) -> int:
                 error_code == "spool_write_failed"
                 or _stop_capture_was_lost(action)
             ),
+            detail=detail,
         )
     if process.stdout:
         try:

@@ -39,6 +39,8 @@ CONTENT_LOCATION_REGISTRY: tuple[ContentLocation, ...] = (
     ContentLocation("derive.proposal_receipts", "directory", "proposal-spool/receipts"),
     ContentLocation("compiler.acknowledgements", "directory", "runtime/acknowledgements"),
     ContentLocation("compiler.delivery_retry", "directory", "runtime"),
+    ContentLocation("capture.pending_prompts", "directory", "runtime/pending-prompts"),
+    ContentLocation("capture.last_assistant", "directory", "runtime/last-assistant"),
     ContentLocation("import.quarantine", "directory", "quarantine"),
     ContentLocation("projection.jsonld_markdown", "directory", "projections"),
     ContentLocation("retrieval.indexes", "directory", "indexes"),

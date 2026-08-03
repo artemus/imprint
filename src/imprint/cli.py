@@ -60,7 +60,10 @@ def _validate_hook_event(event: dict, expected: str) -> None:
     native_name = event.get("hook_event_name")
     if native_name is not None and native_name != expected:
         raise ValidationError(f"hook_event_name must be {expected}")
-    for field in ("session_id", "sessionId", "cwd", "working_directory", "transcript_path", "source"):
+    for field in (
+        "session_id", "sessionId", "cwd", "working_directory",
+        "transcript_path", "source", "last_assistant_message",
+    ):
         if field in event and not isinstance(event[field], str):
             raise ValidationError(f"hook field {field} must be a string")
 
@@ -1276,10 +1279,16 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.action == "user-prompt-submit":
                 _validate_hook_event(event, "UserPromptSubmit")
+                from .capture.prompt_cache import save_pending_prompt
                 from .domains import registry_from_config
                 from .retrieve import retrieve_payload
-                store.initialize()
                 prompt = str(event.get("prompt") or event.get("user_prompt") or "")
+                transcript_path = (
+                    event.get("transcript_path")
+                    if isinstance(event.get("transcript_path"), str) else None
+                )
+                save_pending_prompt(root, session, prompt, transcript_path)
+                store.initialize()
                 selection = registry_from_config(config).select(
                     explicit=str(event["domain_id"]) if event.get("domain_id") else None,
                     path=str(event.get("cwd") or event.get("working_directory") or "") or None,
@@ -1320,6 +1329,12 @@ def main(argv: list[str] | None = None) -> int:
                 _validate_hook_event(event, "Stop")
                 from .capture import CapturePipeline
                 from .capture.pipeline import CapturePersistenceError
+                from .capture.prompt_cache import (
+                    discard_pending_prompt,
+                    load_pending_prompt,
+                    save_last_assistant,
+                    transcript_source_unavailable,
+                )
                 from .capture.transcript import (
                     MAX_TRANSCRIPT_BYTES,
                     _parse_native_stop_snapshot,
@@ -1330,28 +1345,59 @@ def main(argv: list[str] | None = None) -> int:
                 case_description = event.get("case_description")
                 contextual_evidence = []
                 extensions = {}
+                pending_prompt = None
                 if not operator_text and isinstance(event.get("transcript_path"), str):
-                    snapshot = _read_native_transcript_snapshot(
-                        event["transcript_path"], tail_limit=2 * 1024 * 1024,
-                    )
-                    if snapshot.size > MAX_TRANSCRIPT_BYTES:
-                        native = _parse_large_native_transcript(
-                            event["transcript_path"], snapshot=snapshot,
+                    try:
+                        snapshot = _read_native_transcript_snapshot(
+                            event["transcript_path"], tail_limit=2 * 1024 * 1024,
                         )
-                        extensions["org.imprint.transcript"] = native["degradation"]
+                    except ValidationError:
+                        if not transcript_source_unavailable(event["transcript_path"]):
+                            raise
+                        pending_prompt = load_pending_prompt(
+                            root, session, event["transcript_path"],
+                        )
+                        if pending_prompt is None:
+                            raise
                     else:
-                        native = _parse_native_stop_snapshot(snapshot)
-                        if "degradation" in native:
+                        if snapshot.size > MAX_TRANSCRIPT_BYTES:
+                            native = _parse_large_native_transcript(
+                                event["transcript_path"], snapshot=snapshot,
+                            )
                             extensions["org.imprint.transcript"] = native["degradation"]
-                    operator_text = native["operator_text"]
-                    prior_assistant = native["prior_assistant_output"]
-                    case_description = native["case_description"]
+                        else:
+                            native = _parse_native_stop_snapshot(snapshot)
+                            if "degradation" in native:
+                                extensions["org.imprint.transcript"] = native["degradation"]
+                        operator_text = native["operator_text"]
+                        prior_assistant = native["prior_assistant_output"]
+                        case_description = native["case_description"]
+                        if isinstance(prior_assistant, str) and prior_assistant:
+                            contextual_evidence = [{
+                                "kind": "context", "content": prior_assistant,
+                                "source_locator": native["source_locator"],
+                            }]
+                elif not operator_text:
+                    pending_prompt = load_pending_prompt(root, session, None)
+                if pending_prompt is not None:
+                    operator_text = pending_prompt.prompt
+                    prior_assistant = pending_prompt.prior_assistant_output
+                    case_description = (
+                        "Explicit operator feedback witnessed by Claude Code "
+                        "UserPromptSubmit when no transcript file was published"
+                    )
+                    extensions["org.imprint.transcript"] = {
+                        "schema_version": "1.0.0",
+                        "payload": pending_prompt.degradation,
+                    }
                     if isinstance(prior_assistant, str) and prior_assistant:
                         contextual_evidence = [{
                             "kind": "context", "content": prior_assistant,
-                            "source_locator": native["source_locator"],
+                            "source_locator": pending_prompt.source_locator,
                         }]
                 if not isinstance(operator_text, str) or not operator_text.strip():
+                    save_last_assistant(root, session, event.get("last_assistant_message"))
+                    discard_pending_prompt(root, session)
                     _write_json({"hook_schema_version": "1.0.0", "status": "skipped", "reason": "feedback_text_unavailable"})
                     return 0
                 class HookSpool:
@@ -1386,6 +1432,8 @@ def main(argv: list[str] | None = None) -> int:
                     })
                     return 2
                 if not captured.persisted:
+                    save_last_assistant(root, session, event.get("last_assistant_message"))
+                    discard_pending_prompt(root, session)
                     _write_json({"hook_schema_version": "1.0.0", "status": "skipped", "reason": "not_explicit_feedback"})
                     return 0
                 assert captured.envelope is not None
@@ -1421,6 +1469,8 @@ def main(argv: list[str] | None = None) -> int:
                             receipt["unrelated_quarantine_count"] = counts["quarantined"]
                 if extensions:
                     receipt["degradation"] = extensions["org.imprint.transcript"]["payload"]
+                save_last_assistant(root, session, event.get("last_assistant_message"))
+                discard_pending_prompt(root, session)
                 _write_json(receipt)
                 return 0
             if args.action == "health-check":
