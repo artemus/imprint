@@ -95,10 +95,27 @@ foreach ($path in $paths) {
     )
     [void]$acl.AddAccessRule($grant)
   }
-  # Set-Acl exists on both supported hosts. The .NET-only ACL extension class
-  # raises TypeNotFound under the Windows PowerShell 5.1 host this module also
-  # selects, and 5.1 is the only PowerShell on a stock Windows 11 machine.
-  Set-Acl -LiteralPath $path -AclObject $acl
+  # Write only the sections this script modified. PowerShell's ACL-writing
+  # cmdlet additionally requests SACL access, which a standard user does not
+  # hold, so it is not an option here. .NET Framework carries SetAccessControl
+  # on FileSystemInfo; .NET moved it to an extension class absent from the
+  # Windows PowerShell 5.1 host this module also selects, and 5.1 is the only
+  # PowerShell on a stock Windows 11 machine.
+  if ($PSVersionTable.PSEdition -eq 'Core') {
+    if ($item.PSIsContainer) {
+      [IO.FileSystemAclExtensions]::SetAccessControl(
+        [IO.DirectoryInfo]$item,
+        [Security.AccessControl.DirectorySecurity]$acl
+      )
+    } else {
+      [IO.FileSystemAclExtensions]::SetAccessControl(
+        [IO.FileInfo]$item,
+        [Security.AccessControl.FileSecurity]$acl
+      )
+    }
+  } else {
+    $item.SetAccessControl($acl)
+  }
 }
 """
     result = subprocess.run(

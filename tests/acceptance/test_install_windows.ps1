@@ -108,7 +108,9 @@ try {
     New-Item -ItemType Junction -Path $Junction -Target $InstallRoot | Out-Null
     $refused = $false
     try { & (Join-Path $ArtifactRoot "install\uninstall.ps1") -InstallRoot $Junction -Config $Config -Settings $Settings } catch { $refused = $true }
-    Remove-Item $Junction -Force
+    # Remove-Item on a junction throws NullReferenceException under Windows
+    # PowerShell 5.1. Delete the reparse point itself, never its target.
+    [IO.Directory]::Delete($Junction)
     if (-not $refused -or -not (Test-Path $InstallRoot)) { throw "Uninstaller accepted or damaged a reparse-point root." }
     $Unknown = Join-Path $InstallRoot "unowned-sentinel.txt"
     Set-Content $Unknown "unowned"

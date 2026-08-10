@@ -53,9 +53,14 @@ def test_windows_acl_helper_batches_exact_paths_in_one_powershell_process(tmp_pa
     assert "[Security.AccessControl.FileSecurity]::new()" in script
     assert "RemoveAccessRuleSpecific" not in script
     # [IO.FileSystemAclExtensions] is .NET (Core) only and raises TypeNotFound
-    # under Windows PowerShell 5.1, the only host on a stock Windows 11 install.
-    assert "[IO.FileSystemAclExtensions]" not in script
-    assert "Set-Acl -LiteralPath $path -AclObject $acl" in script
+    # under Windows PowerShell 5.1, the only host on a stock Windows 11 install,
+    # so it must stay behind the edition guard with a .NET Framework path beside
+    # it. Set-Acl is not the portable alternative: it also requests SACL access,
+    # which a standard user does not hold.
+    assert "if ($PSVersionTable.PSEdition -eq 'Core') {" in script
+    assert "[IO.FileSystemAclExtensions]::SetAccessControl(" in script
+    assert "$item.SetAccessControl($acl)" in script
+    assert "Set-Acl" not in script
     assert "$isAdmin -and $owner.Value -eq 'S-1-5-32-544'" in script
     assert "$acl.SetOwner($current)" in script
     assert tmp_path.absolute() in permissions._WINDOWS_HARDENED_DIRECTORIES
@@ -117,17 +122,18 @@ def _emitted_powershell(monkeypatch, tmp_path) -> list[str]:
     return scripts
 
 
-def test_emitted_acl_scripts_avoid_powershell_7_only_constructs(tmp_path, monkeypatch):
+def test_emitted_acl_scripts_avoid_unguarded_powershell_7_only_constructs(tmp_path, monkeypatch):
     # Windows 11 ships Windows PowerShell 5.1 only; pwsh is an optional install.
     # Every ACL script must run on the .NET Framework host as well.
-    core_only = (
-        "[IO.FileSystemAclExtensions]",
-        "-AsHashtable",
-        "??",
-        "ForEach-Object -Parallel",
-    )
+    unguarded_core_only = ("-AsHashtable", "??", "ForEach-Object -Parallel")
     scripts = _emitted_powershell(monkeypatch, tmp_path)
     assert len(scripts) == 2
     for script in scripts:
-        for construct in core_only:
+        for construct in unguarded_core_only:
             assert construct not in script
+        # The one .NET-only type used anywhere is reachable only from the Core
+        # branch, and the Desktop branch beside it uses the .NET Framework API.
+        if "[IO.FileSystemAclExtensions]" in script:
+            guard = script.index("if ($PSVersionTable.PSEdition -eq 'Core') {")
+            assert guard < script.index("[IO.FileSystemAclExtensions]")
+            assert "} else {\n    $item.SetAccessControl($acl)\n  }" in script

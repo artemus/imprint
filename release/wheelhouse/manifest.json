@@ -59,7 +59,7 @@
       },
       {
         "path": "release/wheelhouse/linux/imprint_local-3.1.2-py3-none-any.whl",
-        "sha256": "4b566cb496350ade4134331eb5072d2e5ac5dc37f168e335c7cc2a07bf4c65a7"
+        "sha256": "37aa8c823c18dbc29c9e6be0907f73fe11c1a723a0b09e16d40c688bc627b463"
       },
       {
         "path": "release/wheelhouse/linux/pycparser-3.0-py3-none-any.whl",
@@ -75,7 +75,7 @@
       },
       {
         "path": "requirements/runtime-linux.lock",
-        "sha256": "257f723b5a80440d64fbec1dc931f5a96b4002a3892760ee020c3a10c287f04e"
+        "sha256": "ad171961e7be50a58b92d51e94a0aca43048fc5d97eef0a31f18a68c606c3104"
       }
     ],
     "macos": [
@@ -129,7 +129,7 @@
       },
       {
         "path": "release/wheelhouse/macos/imprint_local-3.1.2-py3-none-any.whl",
-        "sha256": "4b566cb496350ade4134331eb5072d2e5ac5dc37f168e335c7cc2a07bf4c65a7"
+        "sha256": "37aa8c823c18dbc29c9e6be0907f73fe11c1a723a0b09e16d40c688bc627b463"
       },
       {
         "path": "release/wheelhouse/macos/pycparser-3.0-py3-none-any.whl",
@@ -145,7 +145,7 @@
       },
       {
         "path": "requirements/runtime-macos.lock",
-        "sha256": "d8d68ae8ed362052349d4eadfcfea6b9f373e1e7e52a4a90243ea0694b2a181f"
+        "sha256": "429b338a2bc976eb3c9667b237e3c3ccaa4afbe46d0f7e27c23789561b489d1b"
       }
     ],
     "windows": [
@@ -179,7 +179,7 @@
       },
       {
         "path": "release/wheelhouse/windows/imprint_local-3.1.2-py3-none-any.whl",
-        "sha256": "4b566cb496350ade4134331eb5072d2e5ac5dc37f168e335c7cc2a07bf4c65a7"
+        "sha256": "37aa8c823c18dbc29c9e6be0907f73fe11c1a723a0b09e16d40c688bc627b463"
       },
       {
         "path": "release/wheelhouse/windows/pycparser-3.0-py3-none-any.whl",
@@ -195,7 +195,7 @@
       },
       {
         "path": "requirements/runtime-windows.lock",
-        "sha256": "f5fb5466dc647dfb7b0142baa63f00090b3dfeb14c8b778880ec6d1a7c39c343"
+        "sha256": "98e4a1bee595a77b28f4a8142ffa8ea612452209602318109a146494729cd7c1"
       }
     ]
   },
