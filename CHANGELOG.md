@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.1.2 — 2026-08-10
 
 - Fix the Windows installer writing `config.json` with a UTF-8 BOM under Windows
   PowerShell 5.1, which failed the version-check gate as a corrupt config and

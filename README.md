@@ -5,9 +5,9 @@ express while working with Claude Code. It stores the raw **Case**, **Verdict**,
 **Call**, optional **Reason**, and available chosen/rejected alternatives before
 any principle is derived. Later projections never replace that source evidence.
 
-Imprint 3.1.1 is the authority, ontology, resilience, and public-operability
-release built on the clean 3.0.0 architectural reset and 3.0.1 integrity
-closure. The v3 line is not data-compatible by accident: imports are
+The Imprint 3.1 line is the authority, ontology, resilience, and
+public-operability release built on the clean 3.0.0 architectural reset and
+3.0.1 integrity closure. The v3 line is not data-compatible by accident: imports are
 quarantined, migrations are additive, and JSON-LD is the portable interchange
 format.
 
@@ -58,7 +58,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 Both installers create an isolated virtual environment, write a portable config,
 install an owned `imprint` launcher in the user's command path, register each
 managed hook exactly once, and fail if the installed CLI cannot report version
-`3.1.1`. Re-running the installer is safe and removes duplicate managed hooks
+`3.1.2`. Re-running the installer is safe and removes duplicate managed hooks
 while preserving unrelated hooks. On POSIX, the installer adds one marked PATH
 block to the active shell's login profile (`.zprofile`, `.bash_profile`, or
 `.profile`); uninstall removes that exact owned block and leaves unrelated shell
