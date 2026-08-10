@@ -95,17 +95,10 @@ foreach ($path in $paths) {
     )
     [void]$acl.AddAccessRule($grant)
   }
-  if ($item.PSIsContainer) {
-    [IO.FileSystemAclExtensions]::SetAccessControl(
-      [IO.DirectoryInfo]$item,
-      [Security.AccessControl.DirectorySecurity]$acl
-    )
-  } else {
-    [IO.FileSystemAclExtensions]::SetAccessControl(
-      [IO.FileInfo]$item,
-      [Security.AccessControl.FileSecurity]$acl
-    )
-  }
+  # Set-Acl exists on both supported hosts. The .NET-only ACL extension class
+  # raises TypeNotFound under the Windows PowerShell 5.1 host this module also
+  # selects, and 5.1 is the only PowerShell on a stock Windows 11 machine.
+  Set-Acl -LiteralPath $path -AclObject $acl
 }
 """
     result = subprocess.run(
@@ -121,7 +114,13 @@ foreach ($path in $paths) {
         if os.environ.get("IMPRINT_ACCEPTANCE_DEBUG") == "1":
             detail = (result.stderr or result.stdout or "no PowerShell detail").strip()
             raise OSError(f"unable to secure private Imprint state on Windows: {detail}")
-        raise OSError("unable to secure private Imprint state on Windows")
+        # The detail can name private state paths, so it stays behind the debug
+        # switch; the switch itself must be discoverable without reading source.
+        raise OSError(
+            "unable to secure private Imprint state on Windows "
+            f"(host {Path(executable).name}; set IMPRINT_ACCEPTANCE_DEBUG=1 "
+            "to see the PowerShell detail)"
+        )
     _cache_hardened_windows_directories(paths)
 
 

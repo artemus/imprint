@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- Fix the Windows installer writing `config.json` with a UTF-8 BOM under Windows
+  PowerShell 5.1, which failed the version-check gate as a corrupt config and
+  rolled the whole install back (#1).
+- Fix the Windows installer aborting an upgrade that has an existing config
+  under Windows PowerShell 5.1, which has no `ConvertFrom-Json -AsHashtable`.
+- Tolerate a leading BOM when loading config, so a config written by any other
+  Windows tool is not reported as corrupt.
+- Fix private-state ACL hardening failing on Windows PowerShell 5.1, which broke
+  `imprint health` and every hook on a stock Windows 11 machine unless
+  PowerShell 7 was installed. PowerShell 7 is no longer required anywhere (#2).
+- Name the PowerShell host and the `IMPRINT_ACCEPTANCE_DEBUG` switch in the
+  Windows ACL failure message instead of failing opaquely.
+- Add `hook_timeout_seconds` config and the `IMPRINT_HOOK_TIMEOUT_SECONDS`
+  environment override, bounded to 1–300, defaulting to 60 on Windows where cold
+  start regularly exceeded the previously hard-coded 10-second watchdog. Hook
+  timeout output now reports the action and the deadline that was applied (#4).
+- Report `spool_stale` from pending spool inputs only. An acknowledged,
+  hash-verified copy that retention policy requires keeping no longer degrades
+  deep health. Adds `pending_spool_depth`, `oldest_pending_spool_age_seconds`,
+  `acknowledged_retained_spool_depth`, and `spool_evidence`; health schema
+  1.2.0 (#5).
+- Add `compiler_state_label` (`idle`/`compiling`/`invalid`) and document that
+  `compiler_state: absent` is an idle lock, not a missing service; document that
+  `imprint log --date` is a UTC calendar date, with portable today examples (#6).
+- Run the Windows install acceptance under Windows PowerShell 5.1 in CI with
+  PowerShell 7 hidden, so stock-host regressions cannot ship again.
+
 ## 3.1.1 — 2026-07-18
 
 - Removed private product-extension taxonomies from the public ontology surface.

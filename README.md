@@ -99,7 +99,7 @@ imprint version
 imprint health
 imprint health --deep
 imprint whoami
-imprint log --date 2026-07-16 --limit 100
+imprint log --date 2026-07-16 --limit 100    # --date is a UTC calendar date
 imprint export --format jsonld --output imprint-export.jsonld
 ```
 
@@ -109,10 +109,44 @@ and backup verification. A fresh store reports `backup_state=never_created`
 without becoming degraded. Health output contains counts and state, never
 captured content.
 
-`whoami` prints the opaque configured operator identity. `log` lists at most 200
-content-free canonical event-index rows for one UTC day and can filter by event
-type or opaque event ID. Curation commands default `--by` to the `whoami`
-identity; an explicit `--by` remains available for another governed actor.
+`whoami` prints the opaque configured operator identity. Curation commands
+default `--by` to the `whoami` identity; an explicit `--by` remains available for
+another governed actor.
+
+### `log` dates are UTC, not local
+
+`log` lists at most 200 content-free canonical event-index rows for one **UTC**
+calendar day and can filter by event type or opaque event ID. West of UTC, an
+evening event has already crossed into the next UTC day, so querying your local
+date returns zero rows for work that was captured correctly. Zero rows is not
+evidence of a capture failure until you have checked the UTC date.
+
+Omitting `--date` is always correct: it defaults to today in UTC. To name the
+day explicitly:
+
+```bash
+imprint log --date "$(date -u +%F)" --limit 100
+```
+
+```powershell
+imprint log --date ([DateTime]::UtcNow.ToString('yyyy-MM-dd')) --limit 100
+```
+
+### Reading `compiler_state`
+
+`compiler_state` reports the **exclusive compiler lock**, not a process:
+
+- `absent` (`compiler_state_label: idle`) — no compile operation holds the lock
+  right now. This is the normal state between compiles.
+- `held` (`compiling`) — a compile operation currently holds the lock.
+- `invalid` (`invalid`) — the lock exists but its owner record is unusable.
+  Health degrades with `compiler_lock_invalid`.
+
+Compilation is one-shot and runs inside `imprint compile --once`, the Stop hook,
+and the other commands that consume the spool. **Imprint installs no resident
+compiler service, daemon, or scheduled task**, so there is no background process
+to look for, restart, or find missing. `compiler_evidence` names what was
+actually inspected: the configured compiler authority plus that lock.
 
 ## Core CLI workflows
 

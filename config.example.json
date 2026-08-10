@@ -5,6 +5,7 @@
   "context_budget_bytes": 32768,
   "spool_retention_days": 30,
   "data_root": "/absolute/local/path/for/imprint-data",
+  "hook_timeout_seconds": 10,
   "domains": [
     {
       "domain_id": "example-domain",

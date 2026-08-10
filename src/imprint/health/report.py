@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-HEALTH_SCHEMA_VERSION = "1.1.0"
+HEALTH_SCHEMA_VERSION = "1.2.0"
+_COMPILER_STATE_LABELS = {
+    "absent": "idle",
+    "held": "compiling",
+    "invalid": "invalid",
+}
 
 
 @dataclass(frozen=True)
@@ -16,6 +21,11 @@ class HealthInputs:
     hook_parity_ok: bool = True
     spool_depth: int = -1
     oldest_spool_age_seconds: int = -1
+    # Spool inputs split into pending work and acknowledged copies that policy
+    # deliberately retains. Only pending work can indicate pipeline degradation.
+    pending_spool_depth: int = -1
+    oldest_pending_spool_age_seconds: int = -1
+    acknowledged_retained_spool_depth: int = -1
     spool_stale_after_seconds: int = 3600
     quarantine_count: int = -1
     permissions_state: Literal["not_checked", "safe", "unsafe"] = "not_checked"
@@ -74,10 +84,18 @@ def evaluate_health(values: HealthInputs) -> HealthReport:
         reasons.append("config_invalid")
     if not values.hook_parity_ok:
         reasons.append("hook_parity_failed")
-    if (
-        values.spool_depth > 0
-        and values.oldest_spool_age_seconds > values.spool_stale_after_seconds
-    ):
+    # An acknowledged, canonical, policy-retained audit copy is not pending work.
+    # Retention (>= 1 day) intentionally outlives the stale threshold (1 hour),
+    # so measuring staleness against every spool file reports degradation for
+    # state the runtime is required to keep. Callers that did not separate the
+    # two report -1 and keep the undifferentiated behaviour.
+    measured_pending = values.pending_spool_depth >= 0
+    stale_depth = values.pending_spool_depth if measured_pending else values.spool_depth
+    stale_age = (
+        values.oldest_pending_spool_age_seconds if measured_pending
+        else values.oldest_spool_age_seconds
+    )
+    if stale_depth > 0 and stale_age > values.spool_stale_after_seconds:
         reasons.append("spool_stale")
     if values.quarantine_count > 0:
         reasons.append("quarantine_present")
@@ -104,6 +122,11 @@ def evaluate_health(values: HealthInputs) -> HealthReport:
         "check_mode": values.check_mode,
         "compiler_count": values.compiler_count,
         "compiler_state": values.compiler_state,
+        # compiler_state names the exclusive compiler lock, not a service.
+        # "absent" reads as a missing process during an incident, so the same
+        # fact also ships under a plain-language label. The raw state keeps its
+        # schema-stable values.
+        "compiler_state_label": _COMPILER_STATE_LABELS.get(values.compiler_state, "invalid"),
         "compiler_evidence": "configured_authority_plus_compiler_lock",
         "database_state": values.database_state,
         "database_evidence": (
@@ -115,6 +138,14 @@ def evaluate_health(values: HealthInputs) -> HealthReport:
         "hook_evidence": "configured_hook_directory_required_sources",
         "spool_depth": values.spool_depth,
         "oldest_spool_age_seconds": values.oldest_spool_age_seconds,
+        "pending_spool_depth": values.pending_spool_depth,
+        "oldest_pending_spool_age_seconds": values.oldest_pending_spool_age_seconds,
+        "acknowledged_retained_spool_depth": values.acknowledged_retained_spool_depth,
+        "spool_evidence": (
+            "exact_acknowledgement_hash_match" if measured_pending
+            else "spool_file_presence_only"
+        ),
+        "spool_stale_after_seconds": values.spool_stale_after_seconds,
         "quarantine_count": values.quarantine_count,
         "permissions_state": values.permissions_state,
         "unsafe_permission_count": values.unsafe_permission_count,

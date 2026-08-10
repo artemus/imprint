@@ -50,3 +50,25 @@ def test_launchers_and_path_blocks_are_version_agnostic_and_location_is_recorded
     assert "rem imprint-local-owned-launcher" in windows_install
     assert ".imprint-launcher-dir" in windows_install and ".imprint-launcher-dir" in windows_uninstall
     assert "--expected-version" in posix_uninstall and "--expected-version" in windows_uninstall
+
+
+def test_windows_installer_writes_config_without_a_utf8_bom():
+    source = _read("install/install.ps1")
+    assert "$Utf8NoBom = [Text.UTF8Encoding]::new($false)" in source
+    assert "[IO.File]::WriteAllText($TempConfig, ($ConfigValue | ConvertTo-Json -Depth 8), $Utf8NoBom)" in source
+    # Windows PowerShell 5.1 writes a BOM for -Encoding utf8, which the config
+    # loader would have reported as a corrupt config.
+    assert "Set-Content -Encoding utf8" not in source
+
+
+def test_windows_installer_reads_existing_config_on_windows_powershell_5():
+    source = _read("install/install.ps1")
+    # -AsHashtable is PowerShell 6+ only; on 5.1 it aborts every upgrade that
+    # has an existing config, discarding configured values such as
+    # hook_timeout_seconds.
+    assert "-AsHashtable" not in source
+    assert "$Utf8NoBom.GetString([IO.File]::ReadAllBytes($Config)).TrimStart([char]0xFEFF)" in source
+
+
+def test_installers_tolerate_a_bom_when_merging_an_existing_config():
+    assert 'path.read_text(encoding="utf-8-sig")' in _read("install/install.sh")

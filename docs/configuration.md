@@ -17,6 +17,13 @@ object and preserves unknown namespaced extensions.
   Values above 32,768 require `allow_higher_budget: true`.
 - `spool_retention_days`: 1–36,500; default 30. Pruning is never automatic and
   deletes only this configured `node_id`'s hash-verified, acknowledged inputs.
+- `hook_timeout_seconds`: 1–300. Default 10 on macOS/Linux and 60 on Windows,
+  where cold interpreter start and security scanning add latency a healthy hook
+  cannot control. The hook bridge enforces this deadline per invocation; on
+  Windows it is a terminating watchdog, so a value below real cold-start cost
+  makes a healthy `SessionStart` fail deterministically. Timeout output reports
+  the action and the deadline that was applied. Both installers merge into an
+  existing config, so a configured value survives reinstall and upgrade.
 - `domains`: optional closed array of domain packs. Each pack declares a safe
   `domain_id`, `public_label`, optional `safe_paths`, optional `keywords`, and
   `frozen`. Selection order is explicit ID, longest safe path, then keyword.
@@ -34,6 +41,9 @@ absolute path before using it.
 ## Environment overrides
 
 - `IMPRINT_CONFIG`: config path.
+- `IMPRINT_HOOK_TIMEOUT_SECONDS`: per-invocation hook deadline, 1–300. Overrides
+  `hook_timeout_seconds` for that process only. A malformed or out-of-range
+  value is ignored rather than applied, so hooks are never left unbounded.
 - `IMPRINT_DATA_ROOT`: default data root used when config omits `data_root`.
 - `IMPRINT_INSTALL_ROOT`: installer/application destination.
 - `CLAUDE_SETTINGS_PATH`: Claude Code settings path used by installers.

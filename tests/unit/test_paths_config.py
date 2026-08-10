@@ -70,3 +70,20 @@ def test_future_config_and_unknown_experimental_flag_fail_truthfully(tmp_path):
     config.write_text('{"experimental":{"digest":true}}')
     with pytest.raises(ValidationError, match="flags were removed"):
         load_config(config)
+
+
+def test_utf8_bom_config_written_by_windows_tools_is_not_corrupt(tmp_path):
+    # Windows PowerShell 5.1's Set-Content -Encoding utf8 prefixes EF BB BF.
+    config = tmp_path / "config.json"
+    config.write_bytes(b"\xef\xbb\xbf" + b'{"config_version":"3.1.1","node_id":"primary"}')
+    assert load_config(config)["node_id"] == "primary"
+
+
+def test_genuinely_corrupt_or_undecodable_config_still_fails_truthfully(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_bytes(b"\xef\xbb\xbf{not json")
+    with pytest.raises(ValidationError, match="corrupt config"):
+        load_config(config)
+    config.write_bytes(b'{"node_id":"\xff\xfe"}')
+    with pytest.raises(ValidationError, match="corrupt config"):
+        load_config(config)

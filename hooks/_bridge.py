@@ -9,9 +9,15 @@ import os
 import signal
 import sys
 import threading
+from pathlib import Path
 from typing import NamedTuple
 
-HOOK_TIMEOUT_SECONDS = 10
+# Windows cold starts pay import and security-scanning latency that a healthy
+# hook cannot control, so the shipped Windows deadline is deliberately wider.
+DEFAULT_HOOK_TIMEOUT_SECONDS = 60 if os.name == "nt" else 10
+MINIMUM_HOOK_TIMEOUT_SECONDS = 1
+MAXIMUM_HOOK_TIMEOUT_SECONDS = 300
+HOOK_TIMEOUT_ENV = "IMPRINT_HOOK_TIMEOUT_SECONDS"
 _EVENT_NAMES = {
     "session-start": "SessionStart",
     "user-prompt-submit": "UserPromptSubmit",
@@ -21,6 +27,70 @@ _EVENT_NAMES = {
 
 class _HookTimeout(Exception):
     pass
+
+
+def _config_file() -> Path:
+    """Mirror ``imprint.config.config_path`` without importing the package.
+
+    The deadline has to be known before any Imprint import runs, because that
+    import is part of what the deadline bounds. Parity with the real resolver
+    is asserted by the hook contract tests.
+    """
+    override = os.environ.get("IMPRINT_CONFIG")
+    if override:
+        return Path(override).expanduser()
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA", Path.home())) / "Imprint" / "config.json"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "imprint" / "config.json"
+
+
+def _bounded_timeout(value: object, *, text: bool = False) -> int | None:
+    """Accept only whole seconds inside the supported deadline range.
+
+    JSON booleans are Python integers but are never valid settings, and a JSON
+    string is rejected here exactly as ``imprint.config`` rejects it, so the
+    hook and ``imprint health`` never disagree about which values are valid.
+    """
+    if isinstance(value, bool):
+        return None
+    if text:
+        try:
+            seconds = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+    elif isinstance(value, int):
+        seconds = value
+    else:
+        return None
+    if MINIMUM_HOOK_TIMEOUT_SECONDS <= seconds <= MAXIMUM_HOOK_TIMEOUT_SECONDS:
+        return seconds
+    return None
+
+
+def _configured_timeout() -> int | None:
+    """Read only this one setting, with stdlib calls the deadline can afford."""
+    try:
+        loaded = json.loads(_config_file().read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    return _bounded_timeout(loaded.get("hook_timeout_seconds"))
+
+
+def hook_timeout_seconds() -> int:
+    """Resolve the hook deadline: environment, then config, then platform default.
+
+    An out-of-range or malformed value never disables hooks; it falls through to
+    the next source. ``imprint health`` reports the same value as invalid config.
+    """
+    from_env = _bounded_timeout(os.environ.get(HOOK_TIMEOUT_ENV), text=True)
+    if from_env is not None:
+        return from_env
+    configured = _configured_timeout()
+    if configured is not None:
+        return configured
+    return DEFAULT_HOOK_TIMEOUT_SECONDS
 
 
 class _Invocation(NamedTuple):
@@ -43,17 +113,20 @@ def _stop_capture_was_lost(action: str) -> bool:
 
 
 def _failure(action: str, error: str, *, stop_hook_active: bool = False,
-             capture_was_lost: bool = False) -> int:
+             capture_was_lost: bool = False, timeout_seconds: int | None = None) -> int:
     """Block Stop once unless durable spool publication is positively known."""
     body = {
         "hook_schema_version": "1.0.0",
         "status": "degraded",
         "error": error,
+        "hook_action": action,
         "failure_policy": (
             "fail_closed" if action == "stop-capture" and capture_was_lost
             else "fail_open"
         ),
     }
+    if timeout_seconds is not None:
+        body["timeout_seconds"] = timeout_seconds
     if action != "stop-capture":
         body["hookSpecificOutput"] = {
             "hookEventName": _EVENT_NAMES[action],
@@ -69,12 +142,13 @@ def _failure(action: str, error: str, *, stop_hook_active: bool = False,
 @contextlib.contextmanager
 def _deadline(action: str, stop_hook_active: bool):
     """Enforce a process-local deadline; Windows uses a terminating watchdog."""
+    timeout = hook_timeout_seconds()
     if hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread():
         def expired(_signum, _frame):
             raise _HookTimeout()
 
         prior = signal.signal(signal.SIGALRM, expired)
-        signal.setitimer(signal.ITIMER_REAL, HOOK_TIMEOUT_SECONDS)
+        signal.setitimer(signal.ITIMER_REAL, timeout)
         try:
             yield
         finally:
@@ -91,6 +165,8 @@ def _deadline(action: str, stop_hook_active: bool):
         body = {
             "hook_schema_version": "1.0.0", "status": "degraded",
             "error": "hook_action_timeout",
+            "hook_action": action,
+            "timeout_seconds": timeout,
             "failure_policy": (
                 "fail_closed"
                 if action == "stop-capture" and capture_was_lost
@@ -106,7 +182,7 @@ def _deadline(action: str, stop_hook_active: bool):
             os.write(2, b"Imprint Stop capture failed: hook_action_timeout\n")
         os._exit(2 if capture_was_lost and not stop_hook_active else 0)
 
-    watchdog = threading.Timer(HOOK_TIMEOUT_SECONDS, terminate)
+    watchdog = threading.Timer(timeout, terminate)
     watchdog.daemon = True
     watchdog.start()
     try:
@@ -155,6 +231,7 @@ def run(action: str) -> int:
         return _failure(
             action, "hook_action_timeout", stop_hook_active=stop_hook_active,
             capture_was_lost=_stop_capture_was_lost(action),
+            timeout_seconds=hook_timeout_seconds(),
         )
     except Exception:
         return _failure(

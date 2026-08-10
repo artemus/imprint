@@ -411,8 +411,11 @@ def test_windows_acl_inspection_is_utf8_and_fail_closed() -> None:
     assert "[Security.AccessControl.DirectorySecurity]::new()" in script
     assert "[Security.AccessControl.FileSecurity]::new()" in script
     assert "RemoveAccessRuleSpecific" not in script
-    assert "[IO.FileSystemAclExtensions]::SetAccessControl(" in script
-    assert "Set-Acl -LiteralPath $path" not in script
+    # The exact DACL is applied through Set-Acl, which both supported PowerShell
+    # hosts provide. The .NET-only ACL extension class raises TypeNotFound under
+    # Windows PowerShell 5.1, the only host on a stock Windows 11 machine.
+    assert "[IO.FileSystemAclExtensions]" not in script
+    assert "Set-Acl -LiteralPath $path -AclObject $acl" in script
     assert "refusing private state not owned by the current user" in script
     assert "$owner.Value -eq 'S-1-5-32-544'" in script
     assert "$isAdmin -and $owner.Value" in script

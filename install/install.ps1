@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ArtifactRoot = Split-Path -Parent $ScriptDir
+$Utf8NoBom = [Text.UTF8Encoding]::new($false)
 
 function Set-PrivateAcl([string]$Path) {
     $Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -171,10 +172,23 @@ try {
     Copy-Item (Join-Path $ArtifactRoot "tools\install\manage_hooks.py") (Join-Path $ToolTarget "manage_hooks.py")
     Copy-Item (Join-Path $ArtifactRoot "tools\install\install_ownership.py") (Join-Path $ToolTarget "install_ownership.py")
 
+    # Windows PowerShell 5.1 cannot convert JSON directly into a hashtable, and
+    # Get-Content keeps a leading UTF-8 BOM in the decoded string. Read the exact
+    # bytes, strip any BOM, and copy the parsed object's properties into a
+    # hashtable so both PowerShell hosts preserve unknown and namespaced config
+    # keys across an upgrade.
     $ConfigValue = @{}
-    if (Test-Path $Config) {
-        $parsed = Get-Content -Raw $Config | ConvertFrom-Json -AsHashtable
-        if ($parsed) { $ConfigValue = $parsed }
+    if (Test-Path $Config -PathType Leaf) {
+        $ExistingText = $Utf8NoBom.GetString([IO.File]::ReadAllBytes($Config)).TrimStart([char]0xFEFF)
+        if ($ExistingText.Trim()) {
+            $Parsed = ConvertFrom-Json $ExistingText
+            if ($null -eq $Parsed -or $Parsed.GetType().Name -ne "PSCustomObject") {
+                throw "Existing config must contain a JSON object: $Config"
+            }
+            foreach ($Property in $Parsed.PSObject.Properties) {
+                $ConfigValue[$Property.Name] = $Property.Value
+            }
+        }
     }
     $ConfigValue["config_version"] = "3.1.1"
     $ConfigValue["data_root"] = [IO.Path]::GetFullPath($DataRoot)
@@ -185,7 +199,9 @@ try {
     if (-not $ConfigValue.ContainsKey("context_budget_bytes")) { $ConfigValue["context_budget_bytes"] = 32768 }
     [void]$ConfigValue.Remove("experimental")
     $TempConfig = "$Config.imprint-tmp"
-    $ConfigValue | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $TempConfig
+    # PowerShell's own utf8 file encoding emits a BOM under Windows PowerShell
+    # 5.1, which the Imprint config loader would reject as a corrupt config.
+    [IO.File]::WriteAllText($TempConfig, ($ConfigValue | ConvertTo-Json -Depth 8), $Utf8NoBom)
     Move-Item -Force $TempConfig $Config
     Set-PrivateAcl $Config
 

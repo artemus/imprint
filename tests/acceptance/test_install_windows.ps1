@@ -81,9 +81,14 @@ try {
     Set-Content -Encoding ascii (Join-Path $InstallRoot "legacy-owned.txt") "legacy"
     & python (Join-Path $ArtifactRoot "tools\install\install_ownership.py") record --root $InstallRoot
     $LegacyManifest = Join-Path $InstallRoot ".imprint-owned-files.json"
-    $LegacyValue = Get-Content -Raw $LegacyManifest | ConvertFrom-Json -AsHashtable
+    # Read and write portably: Windows PowerShell 5.1 has no -AsHashtable, and its
+    # utf8 file encoding emits a BOM that the ownership manifest reader rejects.
+    $Utf8NoBomTest = [Text.UTF8Encoding]::new($false)
+    $LegacyParsed = ConvertFrom-Json ($Utf8NoBomTest.GetString([IO.File]::ReadAllBytes($LegacyManifest)).TrimStart([char]0xFEFF))
+    $LegacyValue = @{}
+    foreach ($LegacyProperty in $LegacyParsed.PSObject.Properties) { $LegacyValue[$LegacyProperty.Name] = $LegacyProperty.Value }
     $LegacyValue["version"] = "3.0.0"
-    $LegacyValue | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $LegacyManifest
+    [IO.File]::WriteAllText($LegacyManifest, ($LegacyValue | ConvertTo-Json -Depth 8), $Utf8NoBomTest)
     [IO.File]::WriteAllText((Join-Path $InstallRoot ".imprint-install-root"), "imprint-local:3.0.0`n", [Text.Encoding]::ASCII)
     & (Join-Path $ArtifactRoot "install\install.ps1") -InstallRoot $InstallRoot -Config $Config -Settings $Settings -DataRoot $Data
     if (Test-Path (Join-Path $InstallRoot "legacy-owned.txt")) { throw "3.0.0 owned application survived upgrade." }

@@ -220,7 +220,7 @@ from pathlib import Path
 path, root, operator, hooks_dir = Path(sys.argv[1]), str(Path(sys.argv[2]).expanduser().resolve()), sys.argv[3], str(Path(sys.argv[4]).resolve())
 value = {}
 if path.exists():
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(value, dict): raise SystemExit("Existing config must contain a JSON object")
 value.update({"config_version":"3.1.1", "data_root":root, "operator_slug":operator, "hooks_dir":hooks_dir})
 value.setdefault("node_id", "primary")
