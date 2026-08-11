@@ -52,8 +52,15 @@ def test_windows_acl_helper_batches_exact_paths_in_one_powershell_process(tmp_pa
     assert "[Security.AccessControl.DirectorySecurity]::new()" in script
     assert "[Security.AccessControl.FileSecurity]::new()" in script
     assert "RemoveAccessRuleSpecific" not in script
+    # [IO.FileSystemAclExtensions] is .NET (Core) only and raises TypeNotFound
+    # under Windows PowerShell 5.1, the only host on a stock Windows 11 install,
+    # so it must stay behind the edition guard with a .NET Framework path beside
+    # it. Set-Acl is not the portable alternative: it also requests SACL access,
+    # which a standard user does not hold.
+    assert "if ($PSVersionTable.PSEdition -eq 'Core') {" in script
     assert "[IO.FileSystemAclExtensions]::SetAccessControl(" in script
-    assert "Set-Acl -LiteralPath $path" not in script
+    assert "$item.SetAccessControl($acl)" in script
+    assert "Set-Acl" not in script
     assert "$isAdmin -and $owner.Value -eq 'S-1-5-32-544'" in script
     assert "$acl.SetOwner($current)" in script
     assert tmp_path.absolute() in permissions._WINDOWS_HARDENED_DIRECTORIES
@@ -83,7 +90,11 @@ def test_windows_acl_detail_is_exposed_only_for_acceptance_debug(tmp_path, monke
     try:
         permissions._secure_windows_paths([tmp_path])
     except OSError as exc:
-        assert str(exc) == "unable to secure private Imprint state on Windows"
+        assert "precise ACL failure" not in str(exc)
+        assert str(exc).startswith("unable to secure private Imprint state on Windows")
+        # The remedy must be discoverable without reading the source.
+        assert "IMPRINT_ACCEPTANCE_DEBUG=1" in str(exc)
+        assert "powershell.exe" in str(exc)
     else:
         raise AssertionError("generic ACL failure was not raised")
     permissions.os.environ["IMPRINT_ACCEPTANCE_DEBUG"] = "1"
@@ -93,3 +104,36 @@ def test_windows_acl_detail_is_exposed_only_for_acceptance_debug(tmp_path, monke
         assert "precise ACL failure" in str(exc)
     else:
         raise AssertionError("debug ACL failure was not raised")
+
+
+def _emitted_powershell(monkeypatch, tmp_path) -> list[str]:
+    scripts: list[str] = []
+
+    def fake_run(command, **_kwargs):
+        scripts.append(command[-1])
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+    permissions._WINDOWS_HARDENED_DIRECTORIES.clear()
+    monkeypatch.setattr(permissions, "os", SimpleNamespace(name="nt", environ={}))
+    monkeypatch.setattr(permissions.shutil, "which", lambda name: "powershell.exe")
+    monkeypatch.setattr(permissions.subprocess, "run", fake_run)
+    permissions._secure_windows_paths([tmp_path])
+    permissions.unsafe_windows_permissions(tmp_path)
+    return scripts
+
+
+def test_emitted_acl_scripts_avoid_unguarded_powershell_7_only_constructs(tmp_path, monkeypatch):
+    # Windows 11 ships Windows PowerShell 5.1 only; pwsh is an optional install.
+    # Every ACL script must run on the .NET Framework host as well.
+    unguarded_core_only = ("-AsHashtable", "??", "ForEach-Object -Parallel")
+    scripts = _emitted_powershell(monkeypatch, tmp_path)
+    assert len(scripts) == 2
+    for script in scripts:
+        for construct in unguarded_core_only:
+            assert construct not in script
+        # The one .NET-only type used anywhere is reachable only from the Core
+        # branch, and the Desktop branch beside it uses the .NET Framework API.
+        if "[IO.FileSystemAclExtensions]" in script:
+            guard = script.index("if ($PSVersionTable.PSEdition -eq 'Core') {")
+            assert guard < script.index("[IO.FileSystemAclExtensions]")
+            assert "} else {\n    $item.SetAccessControl($acl)\n  }" in script

@@ -55,7 +55,7 @@ try {
     $refused = $false
     try { & (Join-Path $ArtifactRoot "install\uninstall.ps1") -InstallRoot $Unowned -Config $Config -Settings $Settings } catch { $refused = $true }
     if (-not $refused -or -not (Test-Path (Join-Path $Unowned "sentinel.txt"))) { throw "Uninstaller accepted or damaged an unowned root." }
-    $Wheel = Get-ChildItem (Join-Path $ArtifactRoot "dist") -Filter "imprint_local-3.1.1-*.whl" | Select-Object -First 1
+    $Wheel = Get-ChildItem (Join-Path $ArtifactRoot "dist") -Filter "imprint_local-3.1.2-*.whl" | Select-Object -First 1
     $ValidWheel = "$($Wheel.FullName).valid"
     Move-Item $Wheel.FullName $ValidWheel
     Set-Content $Wheel.FullName "not-a-wheel"
@@ -81,15 +81,20 @@ try {
     Set-Content -Encoding ascii (Join-Path $InstallRoot "legacy-owned.txt") "legacy"
     & python (Join-Path $ArtifactRoot "tools\install\install_ownership.py") record --root $InstallRoot
     $LegacyManifest = Join-Path $InstallRoot ".imprint-owned-files.json"
-    $LegacyValue = Get-Content -Raw $LegacyManifest | ConvertFrom-Json -AsHashtable
+    # Read and write portably: Windows PowerShell 5.1 has no -AsHashtable, and its
+    # utf8 file encoding emits a BOM that the ownership manifest reader rejects.
+    $Utf8NoBomTest = [Text.UTF8Encoding]::new($false)
+    $LegacyParsed = ConvertFrom-Json ($Utf8NoBomTest.GetString([IO.File]::ReadAllBytes($LegacyManifest)).TrimStart([char]0xFEFF))
+    $LegacyValue = @{}
+    foreach ($LegacyProperty in $LegacyParsed.PSObject.Properties) { $LegacyValue[$LegacyProperty.Name] = $LegacyProperty.Value }
     $LegacyValue["version"] = "3.0.0"
-    $LegacyValue | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $LegacyManifest
+    [IO.File]::WriteAllText($LegacyManifest, ($LegacyValue | ConvertTo-Json -Depth 8), $Utf8NoBomTest)
     [IO.File]::WriteAllText((Join-Path $InstallRoot ".imprint-install-root"), "imprint-local:3.0.0`n", [Text.Encoding]::ASCII)
     & (Join-Path $ArtifactRoot "install\install.ps1") -InstallRoot $InstallRoot -Config $Config -Settings $Settings -DataRoot $Data
     if (Test-Path (Join-Path $InstallRoot "legacy-owned.txt")) { throw "3.0.0 owned application survived upgrade." }
     & (Join-Path $ArtifactRoot "install\install.ps1") -InstallRoot $InstallRoot -Config $Config -Settings $Settings -DataRoot $Data
     $Version = & $Launcher version
-    if ($LASTEXITCODE -ne 0 -or $Version -ne "3.1.1") { throw "Owned launcher was not callable." }
+    if ($LASTEXITCODE -ne 0 -or $Version -ne "3.1.2") { throw "Owned launcher was not callable." }
     & $Launcher --help | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Owned launcher help failed." }
     $BackupPattern = (Split-Path -Leaf $InstallRoot) + ".imprint-backup.*"
@@ -103,7 +108,9 @@ try {
     New-Item -ItemType Junction -Path $Junction -Target $InstallRoot | Out-Null
     $refused = $false
     try { & (Join-Path $ArtifactRoot "install\uninstall.ps1") -InstallRoot $Junction -Config $Config -Settings $Settings } catch { $refused = $true }
-    Remove-Item $Junction -Force
+    # Remove-Item on a junction throws NullReferenceException under Windows
+    # PowerShell 5.1. Delete the reparse point itself, never its target.
+    [IO.Directory]::Delete($Junction)
     if (-not $refused -or -not (Test-Path $InstallRoot)) { throw "Uninstaller accepted or damaged a reparse-point root." }
     $Unknown = Join-Path $InstallRoot "unowned-sentinel.txt"
     Set-Content $Unknown "unowned"

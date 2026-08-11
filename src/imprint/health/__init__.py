@@ -42,6 +42,37 @@ def _temporary_residue(root: Path) -> list[Path]:
     return residue
 
 
+def _commit_is_proven(root: Path, path: Path) -> bool:
+    """Exact, content-free proof that one retained spool input is committed.
+
+    Mirrors the check the compiler and the pruner use, so health agrees with
+    them about what is still pending. Anything unreadable, mismatched, or
+    unverifiable counts as pending work rather than silently passing.
+    """
+    try:
+        from imprint.capture.schema import validate_capture_envelope
+        from imprint.compiler import acknowledgement_committed
+        envelope = validate_capture_envelope(json.loads(path.read_bytes()))
+        return acknowledgement_committed(root, path, envelope)
+    except Exception:
+        return False
+
+
+def _partition_spools(
+    root: Path, spool_files: list[Path], acknowledgement_files: list[Path],
+) -> tuple[list[Path], int]:
+    """Split spool inputs into pending work and acknowledged retained copies."""
+    acknowledged_names = {(path.parent.name, path.name) for path in acknowledgement_files}
+    pending: list[Path] = []
+    retained = 0
+    for path in spool_files:
+        if (path.parent.name, path.name) in acknowledged_names and _commit_is_proven(root, path):
+            retained += 1
+        else:
+            pending.append(path)
+    return pending, retained
+
+
 def _hooks_ok(hook_root: Path, required: set[str]) -> bool:
     if not hook_root.is_dir() or hook_root.is_symlink():
         return False
@@ -104,6 +135,13 @@ def health_report(root: Path, store, config: dict, *, deep: bool = False) -> dic
         path for path in (root / "runtime" / "acknowledgements").glob("*/*.json")
         if path.is_file() and not path.is_symlink()
     ] if deep and (root / "runtime" / "acknowledgements").exists() else []
+    pending_spool_files, retained_spool_depth = _partition_spools(
+        root, spool_files, acknowledgement_files,
+    )
+    oldest_pending_spool_age = max(
+        (age for age in (_age_seconds(path, now) for path in pending_spool_files) if age >= 0),
+        default=0,
+    )
     delivery_files = [
         path for path in (root / "receipts").glob("*/*.json")
         if path.is_file() and not path.is_symlink() and not path.name.endswith(".pending.json")
@@ -168,6 +206,9 @@ def health_report(root: Path, store, config: dict, *, deep: bool = False) -> dic
         hook_parity_ok=hook_parity,
         spool_depth=len(spool_files) if deep else -1,
         oldest_spool_age_seconds=oldest_spool_age if deep else -1,
+        pending_spool_depth=len(pending_spool_files) if deep else -1,
+        oldest_pending_spool_age_seconds=oldest_pending_spool_age if deep else -1,
+        acknowledged_retained_spool_depth=retained_spool_depth if deep else -1,
         quarantine_count=(len(list((root / "quarantine").glob("*.json"))) if (root / "quarantine").exists() else 0) if deep else -1,
         permissions_state=("unsafe" if unsafe_permissions else "safe") if deep else "not_checked",
         unsafe_permission_count=len(unsafe_permissions) if deep else -1,

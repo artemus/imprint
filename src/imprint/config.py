@@ -22,8 +22,13 @@ DEFAULTS = {
     "context_budget_bytes": 32768,
     "allow_higher_budget": False,
     "spool_retention_days": 30,
+    # Windows cold starts pay import and security-scanning latency a healthy hook
+    # cannot control, so the shipped Windows deadline is deliberately wider.
+    "hook_timeout_seconds": 60 if os.name == "nt" else 10,
     "domains": [],
 }
+MINIMUM_HOOK_TIMEOUT_SECONDS = 1
+MAXIMUM_HOOK_TIMEOUT_SECONDS = 300
 
 # Keys the loader recognizes. ``data_root`` and ``hooks_dir`` are written by the
 # installers but are not part of the portable defaults. Unknown keys are rejected
@@ -54,6 +59,13 @@ def _validate_config(data: dict[str, Any]) -> None:
         raise ValidationError("context_budget_bytes above 32768 requires allow_higher_budget=true")
     if not _is_int(data.get("spool_retention_days")) or not 1 <= data["spool_retention_days"] <= 36500:
         raise ValidationError("spool_retention_days must be 1..36500")
+    if not _is_int(data.get("hook_timeout_seconds")) or not (
+        MINIMUM_HOOK_TIMEOUT_SECONDS <= data["hook_timeout_seconds"] <= MAXIMUM_HOOK_TIMEOUT_SECONDS
+    ):
+        raise ValidationError(
+            f"hook_timeout_seconds must be {MINIMUM_HOOK_TIMEOUT_SECONDS}.."
+            f"{MAXIMUM_HOOK_TIMEOUT_SECONDS}"
+        )
     if not isinstance(data.get("domains"), list):
         raise ValidationError("domains must be an array")
     domain_fields = {"domain_id", "public_label", "safe_paths", "keywords", "frozen"}
@@ -96,8 +108,11 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     data = dict(DEFAULTS)
     if target.exists():
         try:
-            loaded = json.loads(target.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
+            # utf-8-sig tolerates a leading BOM. Windows tools (notably Windows
+            # PowerShell 5.1's Set-Content -Encoding utf8) write one routinely,
+            # and a BOM must not present as a corrupt config.
+            loaded = json.loads(target.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValidationError(f"corrupt config: {target}") from exc
         if not isinstance(loaded, dict):
             raise ValidationError("config must be an object")

@@ -5,9 +5,9 @@ express while working with Claude Code. It stores the raw **Case**, **Verdict**,
 **Call**, optional **Reason**, and available chosen/rejected alternatives before
 any principle is derived. Later projections never replace that source evidence.
 
-Imprint 3.1.1 is the authority, ontology, resilience, and public-operability
-release built on the clean 3.0.0 architectural reset and 3.0.1 integrity
-closure. The v3 line is not data-compatible by accident: imports are
+The Imprint 3.1 line is the authority, ontology, resilience, and
+public-operability release built on the clean 3.0.0 architectural reset and
+3.0.1 integrity closure. The v3 line is not data-compatible by accident: imports are
 quarantined, migrations are additive, and JSON-LD is the portable interchange
 format.
 
@@ -58,7 +58,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 Both installers create an isolated virtual environment, write a portable config,
 install an owned `imprint` launcher in the user's command path, register each
 managed hook exactly once, and fail if the installed CLI cannot report version
-`3.1.1`. Re-running the installer is safe and removes duplicate managed hooks
+`3.1.2`. Re-running the installer is safe and removes duplicate managed hooks
 while preserving unrelated hooks. On POSIX, the installer adds one marked PATH
 block to the active shell's login profile (`.zprofile`, `.bash_profile`, or
 `.profile`); uninstall removes that exact owned block and leaves unrelated shell
@@ -99,7 +99,7 @@ imprint version
 imprint health
 imprint health --deep
 imprint whoami
-imprint log --date 2026-07-16 --limit 100
+imprint log --date 2026-07-16 --limit 100    # --date is a UTC calendar date
 imprint export --format jsonld --output imprint-export.jsonld
 ```
 
@@ -109,10 +109,44 @@ and backup verification. A fresh store reports `backup_state=never_created`
 without becoming degraded. Health output contains counts and state, never
 captured content.
 
-`whoami` prints the opaque configured operator identity. `log` lists at most 200
-content-free canonical event-index rows for one UTC day and can filter by event
-type or opaque event ID. Curation commands default `--by` to the `whoami`
-identity; an explicit `--by` remains available for another governed actor.
+`whoami` prints the opaque configured operator identity. Curation commands
+default `--by` to the `whoami` identity; an explicit `--by` remains available for
+another governed actor.
+
+### `log` dates are UTC, not local
+
+`log` lists at most 200 content-free canonical event-index rows for one **UTC**
+calendar day and can filter by event type or opaque event ID. West of UTC, an
+evening event has already crossed into the next UTC day, so querying your local
+date returns zero rows for work that was captured correctly. Zero rows is not
+evidence of a capture failure until you have checked the UTC date.
+
+Omitting `--date` is always correct: it defaults to today in UTC. To name the
+day explicitly:
+
+```bash
+imprint log --date "$(date -u +%F)" --limit 100
+```
+
+```powershell
+imprint log --date ([DateTime]::UtcNow.ToString('yyyy-MM-dd')) --limit 100
+```
+
+### Reading `compiler_state`
+
+`compiler_state` reports the **exclusive compiler lock**, not a process:
+
+- `absent` (`compiler_state_label: idle`) — no compile operation holds the lock
+  right now. This is the normal state between compiles.
+- `held` (`compiling`) — a compile operation currently holds the lock.
+- `invalid` (`invalid`) — the lock exists but its owner record is unusable.
+  Health degrades with `compiler_lock_invalid`.
+
+Compilation is one-shot and runs inside `imprint compile --once`, the Stop hook,
+and the other commands that consume the spool. **Imprint installs no resident
+compiler service, daemon, or scheduled task**, so there is no background process
+to look for, restart, or find missing. `compiler_evidence` names what was
+actually inspected: the configured compiler authority plus that lock.
 
 ## Core CLI workflows
 

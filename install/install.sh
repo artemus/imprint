@@ -77,6 +77,7 @@ if [ -d "${INSTALL_ROOT}" ] && [ -n "$(find "${INSTALL_ROOT}" -mindepth 1 -maxde
     imprint-local:3.0.1) EXISTING_VERSION="3.0.1" ;;
     imprint-local:3.1.0) EXISTING_VERSION="3.1.0" ;;
     imprint-local:3.1.1) EXISTING_VERSION="3.1.1" ;;
+    imprint-local:3.1.2) EXISTING_VERSION="3.1.2" ;;
     *) echo "Refusing an unsupported Imprint install version: $(cat "${MARKER}")" >&2; exit 2 ;;
   esac
   "${PYTHON}" "${ARTIFACT_ROOT}/tools/install/install_ownership.py" verify \
@@ -88,7 +89,7 @@ case "$(uname -s):$(uname -m)" in
   Linux:x86_64|Linux:aarch64) WHEEL_LANE="linux" ;;
   *) echo "Unsupported Imprint platform/architecture: $(uname -s)/$(uname -m)" >&2; exit 2 ;;
 esac
-echo "Before extraction or execution, verify this complete archive with the full GitHub attestation policy documented for v3.1.1. Internal hashes establish component integrity only, not public provenance." >&2
+echo "Before extraction or execution, verify this complete archive with the full GitHub attestation policy documented for v3.1.2. Internal hashes establish component integrity only, not public provenance." >&2
 VERIFIER="${ARTIFACT_ROOT}/tools/install/verify_wheelhouse.py"
 EXPECTED_VERIFIER_SHA256="783a44343f848e969869242e488d14485dfd851c9e2018debe18c2eeab8ff9d5"
 MANIFEST_DIGEST_FILE="${ARTIFACT_ROOT}/release/wheelhouse/manifest.sha256"
@@ -220,7 +221,7 @@ from pathlib import Path
 path, root, operator, hooks_dir = Path(sys.argv[1]), str(Path(sys.argv[2]).expanduser().resolve()), sys.argv[3], str(Path(sys.argv[4]).resolve())
 value = {}
 if path.exists():
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(value, dict): raise SystemExit("Existing config must contain a JSON object")
 value.update({"config_version":"3.1.1", "data_root":root, "operator_slug":operator, "hooks_dir":hooks_dir})
 value.setdefault("node_id", "primary")
