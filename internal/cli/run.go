@@ -20,6 +20,8 @@ import (
 	"github.com/artemus/imprint/internal/domain"
 	"github.com/artemus/imprint/internal/identity"
 	"github.com/artemus/imprint/internal/paths"
+	"github.com/artemus/imprint/internal/privateio"
+	"github.com/artemus/imprint/internal/projection"
 	"github.com/artemus/imprint/internal/retrieve"
 	"github.com/artemus/imprint/internal/session"
 	"github.com/artemus/imprint/internal/spool"
@@ -36,6 +38,7 @@ Commands:
   compile   compile queued captures into canonical SQLite state
   spool     prune only acknowledged inputs owned by this producer
   store     explicitly recover crash-resident SQLite WAL state
+  export    render a deterministic Markdown view of canonical state
   whoami    print the configured opaque local identity
   log       list a bounded UTC-day canonical event index
   health    verify configuration and canonical store integrity
@@ -172,8 +175,15 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(stderr, err.Error())
 		}
-		response, _ := canonical.JSON(map[string]any{"status": "ok", "deleted": counts.Deleted, "retained": counts.Retained, "already_pruned": counts.AlreadyPruned, "acknowledgements_deleted": counts.AcknowledgementsDeleted, "quarantine_deleted": counts.QuarantineDeleted, "invalid": counts.Invalid})
+		status := "ok"
+		if counts.Invalid > 0 {
+			status = "degraded"
+		}
+		response, _ := canonical.JSON(map[string]any{"status": status, "deleted": counts.Deleted, "retained": counts.Retained, "already_pruned": counts.AlreadyPruned, "acknowledgements_deleted": counts.AcknowledgementsDeleted, "quarantine_deleted": counts.QuarantineDeleted, "invalid": counts.Invalid})
 		fmt.Fprintln(stdout, string(response))
+		if counts.Invalid > 0 {
+			return 2
+		}
 		return 0
 	case "store":
 		if len(args) != 2 || args[1] != "recover" {
@@ -192,6 +202,60 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return fail(stderr, err.Error())
 		}
 		response, _ := canonical.JSON(result)
+		fmt.Fprintln(stdout, string(response))
+		return 0
+	case "export":
+		format, output := "", ""
+		for index := 1; index < len(args); index += 2 {
+			if index+1 >= len(args) {
+				return fail(stderr, "export options require values")
+			}
+			switch args[index] {
+			case "--format":
+				format = args[index+1]
+			case "--output":
+				output = args[index+1]
+			default:
+				return fail(stderr, "unknown export option "+args[index])
+			}
+		}
+		if format != "markdown" {
+			return fail(stderr, "native export currently supports --format markdown")
+		}
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		operatorID, err := identity.LoadOrCreate(root)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		defer database.Close()
+		snapshot, err := database.ProjectionState(context.Background())
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		content := projection.Markdown(snapshot)
+		if output == "" {
+			fmt.Fprint(stdout, content)
+			return 0
+		}
+		absolute, err := filepath.Abs(output)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		if err = privateio.PublishNew(absolute, []byte(content)); err != nil {
+			return fail(stderr, err.Error())
+		}
+		response, _ := canonical.JSON(map[string]string{"status": "exported", "path": absolute})
 		fmt.Fprintln(stdout, string(response))
 		return 0
 	case "whoami":

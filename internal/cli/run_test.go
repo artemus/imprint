@@ -103,6 +103,19 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 	if !strings.Contains(stdout.String(), `"status":"clean"`) || !strings.Contains(stdout.String(), `"integrity":"ok"`) {
 		t.Fatalf("store recover stdout=%s", stdout.String())
 	}
+	exportPath := filepath.Join(temporary, "imprint.md")
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"--config", configPath, "export", "--format", "markdown", "--output", exportPath}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("export code=%d stderr=%s", code, stderr.String())
+	}
+	markdown, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(markdown), "# Imprint") || !strings.Contains(string(markdown), envelope.Verdict.RawOperatorText) {
+		t.Fatalf("markdown=%s", markdown)
+	}
 	for _, command := range [][]string{{"whoami"}, {"health", "--deep"}, {"log", "--date", strings.Split(envelope.CapturedAt, "T")[0]}} {
 		stdout.Reset()
 		stderr.Reset()
