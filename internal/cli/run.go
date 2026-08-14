@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/artemus/imprint/internal/buildinfo"
 	"github.com/artemus/imprint/internal/canonical"
 	"github.com/artemus/imprint/internal/capture"
+	"github.com/artemus/imprint/internal/ceremony"
 	"github.com/artemus/imprint/internal/compiler"
 	"github.com/artemus/imprint/internal/config"
 	"github.com/artemus/imprint/internal/domain"
@@ -43,6 +45,7 @@ Commands:
   health    verify configuration and canonical store integrity
   hook      execute a native Claude Code hook action
   retrieve  build provenance-gated context under an exact byte budget
+  authority perform the native-terminal first-trust enrollment ceremony
 `
 
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -207,6 +210,14 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runExport(args, configPath, stdout, stderr)
 	case "derive":
 		return runDerive(args, configPath, stdout, stderr)
+	case "authority":
+		recoveryDestination := ""
+		if len(args) == 4 && args[1] == "enroll" && args[2] == "--recovery-output" && strings.TrimSpace(args[3]) != "" {
+			recoveryDestination = args[3]
+		} else if len(args) != 2 || args[1] != "enroll" {
+			return fail(stderr, "authority enroll accepts only --recovery-output PATH")
+		}
+		return runAuthorityEnrollment(context.Background(), configPath, recoveryDestination, stdin, stdout, stderr, ceremony.NativeConsole{}, time.Now().UTC(), rand.Reader)
 	case "whoami":
 		if len(args) != 1 {
 			return fail(stderr, "whoami accepts no arguments")

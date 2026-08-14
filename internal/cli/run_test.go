@@ -32,6 +32,28 @@ func TestUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestAuthorityEnrollmentIsPublicButRequiresNativeTerminal(t *testing.T) {
+	for _, arguments := range [][]string{{"authority", "enroll"}, {"authority", "enroll", "--recovery-output", "/offline/recovery.json"}} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(arguments, strings.NewReader(""), &stdout, &stderr); code != 2 {
+			t.Fatalf("%v code=%d", arguments, code)
+		}
+		if !strings.Contains(stderr.String(), "redirected stdin cannot raise authority") {
+			t.Fatalf("%v stderr=%s", arguments, stderr.String())
+		}
+	}
+}
+
+func TestAuthorityEnrollmentRejectsIncompleteOptions(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"authority", "enroll", "--recovery-output"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+		t.Fatalf("code=%d", code)
+	}
+	if !strings.Contains(stderr.String(), "authority enroll accepts only --recovery-output PATH") {
+		t.Fatalf("stderr=%s", stderr.String())
+	}
+}
+
 func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 	temporary, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
