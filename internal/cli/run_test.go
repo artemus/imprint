@@ -103,6 +103,30 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 	if !strings.Contains(stdout.String(), `"status":"clean"`) || !strings.Contains(stdout.String(), `"integrity":"ok"`) {
 		t.Fatalf("store recover stdout=%s", stdout.String())
 	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"--config", configPath, "derive", "--capture", eventPath}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("derive capture code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"status":"queued"`) || !strings.Contains(stdout.String(), `"producer":"imprint-reference-deriver"`) {
+		t.Fatalf("derive capture stdout=%s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"--config", configPath, "derive", "--pending"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("derive pending code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"applied":1`) {
+		t.Fatalf("derive pending stdout=%s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"--config", configPath, "derive", "--pending"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("derive replay code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"skipped":1`) {
+		t.Fatalf("derive replay stdout=%s", stdout.String())
+	}
 	exportPath := filepath.Join(temporary, "imprint.md")
 	stdout.Reset()
 	stderr.Reset()

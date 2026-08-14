@@ -17,11 +17,13 @@ import (
 	"github.com/artemus/imprint/internal/capture"
 	"github.com/artemus/imprint/internal/compiler"
 	"github.com/artemus/imprint/internal/config"
+	"github.com/artemus/imprint/internal/derive"
 	"github.com/artemus/imprint/internal/domain"
 	"github.com/artemus/imprint/internal/identity"
 	"github.com/artemus/imprint/internal/paths"
 	"github.com/artemus/imprint/internal/privateio"
 	"github.com/artemus/imprint/internal/projection"
+	"github.com/artemus/imprint/internal/proposal"
 	"github.com/artemus/imprint/internal/retrieve"
 	"github.com/artemus/imprint/internal/session"
 	"github.com/artemus/imprint/internal/spool"
@@ -39,6 +41,7 @@ Commands:
   spool     prune only acknowledged inputs owned by this producer
   store     explicitly recover crash-resident SQLite WAL state
   export    render a deterministic Markdown view of canonical state
+  derive    validate and compile non-authoritative proposals
   whoami    print the configured opaque local identity
   log       list a bounded UTC-day canonical event index
   health    verify configuration and canonical store integrity
@@ -257,6 +260,85 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		response, _ := canonical.JSON(map[string]string{"status": "exported", "path": absolute})
 		fmt.Fprintln(stdout, string(response))
+		return 0
+	case "derive":
+		if len(args) < 2 || (args[1] != "--pending" && args[1] != "--submit" && args[1] != "--capture") {
+			return fail(stderr, "derive requires --submit PATH, --capture PATH, or --pending")
+		}
+		if (args[1] == "--pending" && len(args) != 2) || (args[1] != "--pending" && len(args) != 3) {
+			return fail(stderr, "derive input option requires a path")
+		}
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		if args[1] == "--submit" {
+			raw, err := os.ReadFile(args[2])
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			candidate, err := proposal.Decode(raw)
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			proposalID, err := derive.Submit(root, candidate)
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			response, _ := canonical.JSON(map[string]string{"status": "queued", "proposal_id": proposalID})
+			fmt.Fprintln(stdout, string(response))
+			return 0
+		}
+		operatorID, err := identity.LoadOrCreate(root)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		if args[1] == "--capture" {
+			raw, err := os.ReadFile(args[2])
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			envelope, err := capture.Decode(raw)
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			if envelope.OperatorID != operatorID || envelope.NodeID != value.NodeID {
+				return fail(stderr, "capture operator/node does not match configured identity")
+			}
+			candidate, err := proposal.FromCapture(envelope, "imprint-reference-deriver")
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			proposalID, err := derive.Submit(root, candidate)
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			response, _ := canonical.JSON(map[string]string{"status": "queued", "proposal_id": proposalID, "producer": "imprint-reference-deriver"})
+			fmt.Fprintln(stdout, string(response))
+			return 0
+		}
+		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		defer database.Close()
+		counts, err := derive.Compile(context.Background(), root, database)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		status := "ok"
+		if counts.Rejected > 0 {
+			status = "degraded"
+		}
+		response, _ := canonical.JSON(map[string]any{"status": status, "applied": counts.Applied, "duplicates": counts.Duplicates, "rejected": counts.Rejected, "skipped": counts.Skipped, "failures": counts.Failures})
+		fmt.Fprintln(stdout, string(response))
+		if counts.Rejected > 0 {
+			return 2
+		}
 		return 0
 	case "whoami":
 		if len(args) != 1 {
