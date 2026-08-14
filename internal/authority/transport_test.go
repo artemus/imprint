@@ -77,6 +77,30 @@ func TestVerifyAuthorityTransportRejectsUnknownLedgerRowFields(t *testing.T) {
 	}
 }
 
+func TestBuildAuthorityTransportProducesCanonicalSelfVerifiedArtifact(t *testing.T) {
+	genesis, row := signedGenesis(t)
+	chain, err := VerifyChain([]LedgerRow{row}, genesis.OperatorID, genesis.StoreIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := signedCheckpoint(t, chain, 1, genesis.KeyID, fixturePrivateKey(0))
+	now := time.Date(2026, 8, 14, 12, 30, 0, 0, time.UTC)
+	artifact, err := BuildAuthorityTransport([]LedgerRow{row}, []Checkpoint{checkpoint}, checkpoint, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := VerifyAuthorityTransport(artifact.Bytes, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.SHA256 == "" || verified.Chain.HeadSHA256 != row.EventSHA256 || verified.Checkpoint.EventSHA256 != row.EventSHA256 {
+		t.Fatalf("artifact=%#v verified=%#v", artifact, verified)
+	}
+	if _, err := BuildAuthorityTransport([]LedgerRow{row}, []Checkpoint{checkpoint}, Checkpoint{}, now); err == nil {
+		t.Fatal("built transport whose latest checkpoint disagreed with history")
+	}
+}
+
 func canonicalTransport(t *testing.T, transport AuthorityTransport) []byte {
 	t.Helper()
 	encoded, err := canonicalContract(transport)

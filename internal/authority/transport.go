@@ -43,8 +43,68 @@ type VerifiedAuthorityTransport struct {
 	Checkpoint CheckpointResult
 }
 
+type AuthorityTransportArtifact struct {
+	Bytes     []byte
+	Transport AuthorityTransport
+	SHA256    string
+}
+
 var transportFields = []string{"transport_version", "operator_id", "store_identity", "authority_ledger_genesis_sha256", "ledger", "ledger_sha256", "checkpoint_history", "checkpoint"}
 var portableLedgerRowFields = []string{"sequence", "event_id", "event_type", "operator_id", "install_id", "key_id", "event_json", "event_sha256", "signature_b64", "previous_event_sha256", "created_at"}
+
+// BuildAuthorityTransport constructs and self-verifies the public chain and
+// closed checkpoint history before publication.
+func BuildAuthorityTransport(rows []LedgerRow, history []Checkpoint, checkpoint Checkpoint, now time.Time) (AuthorityTransportArtifact, error) {
+	if len(rows) == 0 || len(history) == 0 {
+		return AuthorityTransportArtifact{}, errors.New("authority transport ledger or checkpoint history is empty")
+	}
+	chain, err := VerifyChain(rows, rows[0].OperatorID, "")
+	if err != nil {
+		return AuthorityTransportArtifact{}, err
+	}
+	portable := make([]PortableLedgerRow, len(rows))
+	ledgerRaw := make([]json.RawMessage, len(rows))
+	for index, row := range rows {
+		portable[index] = portableRow(row)
+		encoded, encodeErr := canonicalContract(portable[index])
+		if encodeErr != nil {
+			return AuthorityTransportArtifact{}, encodeErr
+		}
+		ledgerRaw[index] = encoded
+	}
+	ledgerSHA, err := LedgerSHA256(portable)
+	if err != nil {
+		return AuthorityTransportArtifact{}, err
+	}
+	historyRaw := make([]json.RawMessage, len(history))
+	for index, item := range history {
+		encoded, encodeErr := canonicalContract(item)
+		if encodeErr != nil {
+			return AuthorityTransportArtifact{}, encodeErr
+		}
+		historyRaw[index] = encoded
+	}
+	checkpointRaw, err := canonicalContract(checkpoint)
+	if err != nil {
+		return AuthorityTransportArtifact{}, err
+	}
+	transport := AuthorityTransport{
+		TransportVersion: TransportVersion, OperatorID: chain.OperatorID,
+		StoreIdentity: chain.StoreIdentity, AuthorityLedgerGenesisSHA256: chain.GenesisSHA256,
+		Ledger: ledgerRaw, LedgerSHA256: ledgerSHA,
+		CheckpointHistory: historyRaw, Checkpoint: checkpointRaw,
+	}
+	encoded, err := canonicalContract(transport)
+	if err != nil {
+		return AuthorityTransportArtifact{}, err
+	}
+	encoded = append(encoded, '\n')
+	if _, err := VerifyAuthorityTransport(encoded, now); err != nil {
+		return AuthorityTransportArtifact{}, err
+	}
+	digest := sha256.Sum256(encoded)
+	return AuthorityTransportArtifact{Bytes: encoded, Transport: transport, SHA256: hex.EncodeToString(digest[:])}, nil
+}
 
 // VerifyAuthorityTransport verifies the canonical, newline-terminated public
 // transport artifact, its ledger, and its fresh closed checkpoint history.
