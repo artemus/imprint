@@ -151,7 +151,7 @@ func approvalDatabase(t *testing.T) (*sql.DB, GenesisEvent, ed25519.PrivateKey) 
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
-	if err := InitializeApprovalSchema(context.Background(), db); err != nil {
+	if err := InitializeSchema(context.Background(), db); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}

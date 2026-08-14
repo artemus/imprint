@@ -186,7 +186,7 @@ func Open(path, operatorID, nodeID string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize store: %w", err)
 	}
-	if err = authority.InitializeApprovalSchema(context.Background(), db); err != nil {
+	if err = authority.InitializeSchema(context.Background(), db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize authority store: %w", err)
 	}

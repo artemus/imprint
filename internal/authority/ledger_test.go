@@ -63,7 +63,7 @@ func TestInsertGenesisMaterializesCanonicalEnrollment(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	if err := InitializeApprovalSchema(context.Background(), db); err != nil {
+	if err := InitializeSchema(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	event, _ := signedGenesis(t)
