@@ -34,6 +34,10 @@ type PublishedRecoveryBundle struct {
 
 var recoveryPublicationJournalFields = []string{"journal_version", "operation_id", "destination", "recovery_key_id", "ledger_head_sha256", "state"}
 
+func CanonicalRecoveryPublicationJournal(journal RecoveryPublicationJournal) ([]byte, error) {
+	return canonicalContract(journal)
+}
+
 func CreateRecoveryPublicationJournal(dataRoot, destination, recoveryKeyID, ledgerHeadSHA256 string) (RecoveryPublicationJournal, error) {
 	root := filepath.Clean(dataRoot)
 	absoluteDestination, err := filepath.Abs(destination)

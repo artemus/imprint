@@ -33,7 +33,7 @@ func TestUnknownCommand(t *testing.T) {
 }
 
 func TestAuthorityEnrollmentIsPublicButRequiresNativeTerminal(t *testing.T) {
-	for _, arguments := range [][]string{{"authority", "enroll"}, {"authority", "enroll", "--recovery-output", "/offline/recovery.json"}} {
+	for _, arguments := range [][]string{{"authority", "enroll"}, {"authority", "enroll", "--recovery-output", "/offline/recovery.json"}, {"authority", "recovery-reconcile"}} {
 		var stdout, stderr bytes.Buffer
 		if code := Run(arguments, strings.NewReader(""), &stdout, &stderr); code != 2 {
 			t.Fatalf("%v code=%d", arguments, code)
@@ -49,7 +49,7 @@ func TestAuthorityEnrollmentRejectsIncompleteOptions(t *testing.T) {
 	if code := Run([]string{"authority", "enroll", "--recovery-output"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
 		t.Fatalf("code=%d", code)
 	}
-	if !strings.Contains(stderr.String(), "authority enroll accepts only --recovery-output PATH") {
+	if !strings.Contains(stderr.String(), "authority requires enroll [--recovery-output PATH] or recovery-reconcile") {
 		t.Fatalf("stderr=%s", stderr.String())
 	}
 }

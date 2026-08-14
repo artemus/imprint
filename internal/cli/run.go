@@ -214,8 +214,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		recoveryDestination := ""
 		if len(args) == 4 && args[1] == "enroll" && args[2] == "--recovery-output" && strings.TrimSpace(args[3]) != "" {
 			recoveryDestination = args[3]
+		} else if len(args) == 2 && args[1] == "recovery-reconcile" {
+			return runAuthorityRecoveryReconcile(configPath, stdin, stdout, stderr, ceremony.NativeConsole{})
 		} else if len(args) != 2 || args[1] != "enroll" {
-			return fail(stderr, "authority enroll accepts only --recovery-output PATH")
+			return fail(stderr, "authority requires enroll [--recovery-output PATH] or recovery-reconcile")
 		}
 		return runAuthorityEnrollment(context.Background(), configPath, recoveryDestination, stdin, stdout, stderr, ceremony.NativeConsole{}, time.Now().UTC(), rand.Reader)
 	case "whoami":

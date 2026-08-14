@@ -180,16 +180,20 @@ func confirmInitialRecoveryBinding(console ceremony.Console, event authority.Gen
 	if err != nil {
 		return err
 	}
+	return confirmExactTransition(console, "initial authority and recovery binding", "BIND INITIAL AUTHORITY", encoded)
+}
+
+func confirmExactTransition(console ceremony.Console, label, phrase string, encoded []byte) error {
 	digest := sha256.Sum256(encoded)
-	if err := console.Write("\nExact initial authority and recovery binding (RFC 8785 canonical JSON):\n" + string(encoded) + "\nTransition SHA-256: " + hex.EncodeToString(digest[:]) + "\n"); err != nil {
+	if err := console.Write("\nExact " + label + " (RFC 8785 canonical JSON):\n" + string(encoded) + "\nTransition SHA-256: " + hex.EncodeToString(digest[:]) + "\n"); err != nil {
 		return err
 	}
-	confirmation, err := console.ReadLine("Type BIND INITIAL AUTHORITY to sign this exact transition: ")
+	confirmation, err := console.ReadLine("Type " + phrase + " to sign this exact transition: ")
 	if err != nil {
 		return err
 	}
-	if confirmation != "BIND INITIAL AUTHORITY" {
-		return errors.New("initial authority and recovery binding was not confirmed")
+	if confirmation != phrase {
+		return errors.New(label + " was not confirmed")
 	}
 	return nil
 }
