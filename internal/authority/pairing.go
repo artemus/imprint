@@ -58,19 +58,12 @@ func VerifyInstallationPaired(prior ChainState, row LedgerRow) (ChainState, erro
 			return ChainState{}, errors.New("authority installation already has an active key")
 		}
 	}
-	if details.AlgorithmSuite != AlgorithmSuite || !lowercaseSHA256.MatchString(details.BlobSHA256) || details.BlobSize <= 0 || !safeRelativeBlobPath(details.BlobRelativePath) {
+	if validateInstallationBlob(details.AlgorithmSuite, details.BlobRelativePath, details.BlobSHA256, details.BlobSize) != nil {
 		return ChainState{}, errors.New("authority installation blob binding is invalid")
 	}
 	authorizationRaw, err := rawObjectField(event.Details, "authorization")
-	if err != nil || decodeExactObject(authorizationRaw, &details.Authorization, installationAuthorizationFields) != nil {
+	if err != nil || validateInstallationAuthorization(prior, certificate, authorizationRaw, &details.Authorization) != nil {
 		return ChainState{}, errors.New("installation authorization certificate is invalid")
-	}
-	authorization := details.Authorization
-	if authorization.CertificateVersion != InstallationAuthorizationVersion || authorization.OperatorID != prior.OperatorID || authorization.StoreIdentity != prior.StoreIdentity || authorization.NewInstallID != certificate.InstallID || authorization.NewKeyID != certificate.KeyID || authorization.NewPublicKeyB64 != certificate.PublicKeyB64 || authorization.PrecedingAuthorityHeadSHA256 != prior.HeadSHA256 {
-		return ChainState{}, errors.New("installation authorization certificate is invalid")
-	}
-	if _, err := utcTimestamp(authorization.ExpiresAt); err != nil {
-		return ChainState{}, err
 	}
 	next := ChainState{OperatorID: prior.OperatorID, StoreIdentity: prior.StoreIdentity, HeadSHA256: digest, HeadSequence: event.Sequence, Keys: cloneKeys(prior.Keys)}
 	next.Keys[certificate.KeyID] = ChainKey{
@@ -81,4 +74,12 @@ func VerifyInstallationPaired(prior ChainState, row LedgerRow) (ChainState, erro
 		EffectiveAt: event.CreatedAt,
 	}
 	return next, nil
+}
+
+func validateInstallationAuthorization(prior ChainState, certificate KeyCertificate, raw []byte, authorization *installationAuthorization) error {
+	if decodeExactObject(raw, authorization, installationAuthorizationFields) != nil || authorization.CertificateVersion != InstallationAuthorizationVersion || authorization.OperatorID != prior.OperatorID || authorization.StoreIdentity != prior.StoreIdentity || authorization.NewInstallID != certificate.InstallID || authorization.NewKeyID != certificate.KeyID || authorization.NewPublicKeyB64 != certificate.PublicKeyB64 || authorization.PrecedingAuthorityHeadSHA256 != prior.HeadSHA256 {
+		return errors.New("installation authorization certificate is invalid")
+	}
+	_, err := utcTimestamp(authorization.ExpiresAt)
+	return err
 }

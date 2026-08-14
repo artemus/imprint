@@ -88,7 +88,7 @@ func VerifyRotation(prior ChainState, row LedgerRow) (ChainState, error) {
 	if _, exists := prior.Keys[certificate.KeyID]; exists {
 		return ChainState{}, errors.New("authority rotation key already exists")
 	}
-	if details.AlgorithmSuite != AlgorithmSuite || !lowercaseSHA256.MatchString(details.BlobSHA256) || details.BlobSize <= 0 || !safeRelativeBlobPath(details.BlobRelativePath) {
+	if validateInstallationBlob(details.AlgorithmSuite, details.BlobRelativePath, details.BlobSHA256, details.BlobSize) != nil {
 		return ChainState{}, errors.New("authority rotation blob binding is invalid")
 	}
 	next := ChainState{OperatorID: prior.OperatorID, StoreIdentity: prior.StoreIdentity, HeadSHA256: digest, HeadSequence: event.Sequence, Keys: cloneKeys(prior.Keys)}
@@ -173,4 +173,11 @@ func rawObjectField(raw []byte, field string) (json.RawMessage, error) {
 		return nil, errors.New("JSON object field is missing")
 	}
 	return object[field], nil
+}
+
+func validateInstallationBlob(algorithm, relativePath, digest string, size int64) error {
+	if algorithm != AlgorithmSuite || !lowercaseSHA256.MatchString(digest) || size <= 0 || !safeRelativeBlobPath(relativePath) {
+		return errors.New("authority installation blob binding is invalid")
+	}
+	return nil
 }
