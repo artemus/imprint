@@ -121,7 +121,10 @@ func (prepared PreparedMutation) Verify(commandName, operatorID string, intent, 
 		return ChallengeRequest{}, nil, errors.New("authority token is for another command or operator")
 	}
 	expires, err := utcTimestamp(prepared.ExpiresAt)
-	if err != nil || !now.UTC().Before(expires) {
+	if err != nil {
+		return ChallengeRequest{}, nil, err
+	}
+	if !now.UTC().Before(expires) {
 		return ChallengeRequest{}, nil, errors.New("prepared mutation has expired")
 	}
 	intentJSON, _, err := canonicalJSONDigest(intent)

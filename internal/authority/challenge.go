@@ -4,6 +4,7 @@ package authority
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,44 @@ type ApprovalToken struct {
 	SignatureB64 string    `json:"signature_b64"`
 }
 
+type ActiveBinding struct {
+	OperatorID, InstallID, KeyID, StoreIdentity, PublicKeyB64 string
+}
+
+func BuildChallenge(request ChallengeRequest, binding ActiveBinding, ledgerSequence int64, ttl time.Duration, now time.Time, random io.Reader) (Challenge, error) {
+	if err := request.Validate(); err != nil {
+		return Challenge{}, err
+	}
+	if ttl < time.Second || ttl > MaxApprovalTTL || ttl%time.Second != 0 {
+		return Challenge{}, errors.New("authority challenge TTL must be 1..120 seconds")
+	}
+	if ledgerSequence < 1 || binding.OperatorID == "" || binding.InstallID == "" || binding.KeyID == "" || binding.StoreIdentity == "" {
+		return Challenge{}, errors.New("authority challenge binding is invalid")
+	}
+	if random == nil {
+		random = rand.Reader
+	}
+	nonce := make([]byte, 32)
+	if _, err := io.ReadFull(random, nonce); err != nil {
+		return Challenge{}, errors.New("authority challenge nonce generation failed")
+	}
+	request = normalizedRequest(request)
+	challenge := Challenge{
+		ContractVersion: ApprovalContractVersion, DomainSeparator: ApprovalDomain,
+		OperatorID: binding.OperatorID, InstallID: binding.InstallID, KeyID: binding.KeyID,
+		StoreIdentity: binding.StoreIdentity, LedgerSequence: ledgerSequence,
+		OperationID: request.OperationID, Purpose: request.Purpose,
+		SubjectIDs: request.SubjectIDs, SourceIDs: request.SourceIDs, TargetIDs: request.TargetIDs,
+		ProposalIDs: request.ProposalIDs, ResultVersionIDs: request.ResultVersionIDs,
+		PayloadSHA256: request.PayloadSHA256, PriorStateSHA256: request.PriorStateSHA256,
+		ExecutionFieldsSHA256: request.ExecutionFieldsSHA256, Scope: request.Scope,
+		FieldPaths: request.FieldPaths, AuthorityTransition: request.AuthorityTransition,
+		Nonce: base64.RawURLEncoding.EncodeToString(nonce), IssuedAt: utcText(now),
+		ExpiresAt: utcText(now.Add(ttl)),
+	}
+	return challenge, challenge.Validate()
+}
+
 func DecodeApprovalToken(raw []byte) (ApprovalToken, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -65,7 +104,7 @@ func DecodeApprovalToken(raw []byte) (ApprovalToken, error) {
 	if err := token.Challenge.Validate(); err != nil {
 		return ApprovalToken{}, err
 	}
-	signature, err := base64.StdEncoding.Strict().DecodeString(token.SignatureB64)
+	signature, err := canonicalBase64(token.SignatureB64)
 	if err != nil || len(signature) != ed25519.SignatureSize || base64.StdEncoding.EncodeToString(signature) != token.SignatureB64 {
 		return ApprovalToken{}, errors.New("approval signature is not canonical Ed25519 bytes")
 	}
