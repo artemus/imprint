@@ -34,6 +34,7 @@ Commands:
   config    validate and print resolved public configuration
   capture   validate and durably queue a raw capture envelope
   compile   compile queued captures into canonical SQLite state
+  spool     prune only acknowledged inputs owned by this producer
   whoami    print the configured opaque local identity
   log       list a bounded UTC-day canonical event index
   health    verify configuration and canonical store integrity
@@ -144,6 +145,34 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if counts.Quarantined > 0 {
 			return 2
 		}
+		return 0
+	case "spool":
+		if len(args) < 2 || args[1] != "prune" {
+			return fail(stderr, "spool requires prune")
+		}
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		retention := value.SpoolRetentionDays
+		if len(args) == 4 && args[2] == "--retention-days" {
+			retention, err = strconv.Atoi(args[3])
+			if err != nil {
+				return fail(stderr, "spool retention-days must be an integer")
+			}
+		} else if len(args) != 2 {
+			return fail(stderr, "spool prune accepts only --retention-days DAYS")
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		counts, err := compiler.PruneAcknowledged(root, value.NodeID, retention, time.Now())
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		response, _ := canonical.JSON(map[string]any{"status": "ok", "deleted": counts.Deleted, "retained": counts.Retained, "already_pruned": counts.AlreadyPruned, "acknowledgements_deleted": counts.AcknowledgementsDeleted, "quarantine_deleted": counts.QuarantineDeleted, "invalid": counts.Invalid})
+		fmt.Fprintln(stdout, string(response))
 		return 0
 	case "whoami":
 		if len(args) != 1 {

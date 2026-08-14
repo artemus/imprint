@@ -84,6 +84,14 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 	if !strings.Contains(stdout.String(), `"captured":1`) {
 		t.Fatalf("compile stdout=%s", stdout.String())
 	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"--config", configPath, "spool", "prune", "--retention-days", "36500"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("spool prune code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"retained":1`) || !strings.Contains(stdout.String(), `"deleted":0`) {
+		t.Fatalf("spool prune stdout=%s", stdout.String())
+	}
 	if _, err := os.Stat(filepath.Join(operatorRoot, "imprint.db")); err != nil {
 		t.Fatal(err)
 	}
