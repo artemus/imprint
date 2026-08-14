@@ -166,3 +166,11 @@ func decodeExactObject(raw []byte, target any, fields []string) error {
 	}
 	return nil
 }
+
+func rawObjectField(raw []byte, field string) (json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object[field] == nil {
+		return nil, errors.New("JSON object field is missing")
+	}
+	return object[field], nil
+}
