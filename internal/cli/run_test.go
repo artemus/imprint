@@ -98,6 +98,23 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 			t.Fatalf("%v stdout=%s", command, stdout.String())
 		}
 	}
+	stdout.Reset()
+	stderr.Reset()
+	retrieveArgs := []string{"--config", configPath, "retrieve", "--session", "test-session"}
+	if code := Run(retrieveArgs, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("retrieve stderr=%s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"status":"delivered"`) {
+		t.Fatalf("retrieve stdout=%s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(retrieveArgs, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("repeat stderr=%s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"status":"already_delivered"`) {
+		t.Fatalf("repeat stdout=%s", stdout.String())
+	}
 }
 
 func TestStopHookPersistsBeforeReturningQueued(t *testing.T) {

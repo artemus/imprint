@@ -19,6 +19,7 @@ import (
 	"github.com/artemus/imprint/internal/config"
 	"github.com/artemus/imprint/internal/identity"
 	"github.com/artemus/imprint/internal/paths"
+	"github.com/artemus/imprint/internal/retrieve"
 	"github.com/artemus/imprint/internal/session"
 	"github.com/artemus/imprint/internal/spool"
 	"github.com/artemus/imprint/internal/store"
@@ -36,6 +37,7 @@ Commands:
   log       list a bounded UTC-day canonical event index
   health    verify configuration and canonical store integrity
   hook      execute a native Claude Code hook action
+  retrieve  build provenance-gated context under an exact byte budget
 `
 
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -357,6 +359,112 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		response, _ := canonical.JSON(receipt)
 		fmt.Fprintln(stdout, string(response))
+		return 0
+	case "retrieve":
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		sessionValue, prompt, domain, mode := "", "", "", "authoritative"
+		refresh, audit := false, false
+		requested := []string{}
+		for index := 1; index < len(args); index++ {
+			switch args[index] {
+			case "--refresh":
+				refresh = true
+			case "--audit":
+				audit = true
+			case "--session", "--prompt", "--domain", "--authority-mode", "--partition":
+				if index+1 >= len(args) {
+					return fail(stderr, args[index]+" requires a value")
+				}
+				option := args[index]
+				index++
+				switch option {
+				case "--session":
+					sessionValue = args[index]
+				case "--prompt":
+					prompt = args[index]
+				case "--domain":
+					domain = args[index]
+				case "--authority-mode":
+					mode = args[index]
+				case "--partition":
+					requested = append(requested, args[index])
+				}
+			default:
+				return fail(stderr, "unknown retrieve option "+args[index])
+			}
+		}
+		if sessionValue == "" {
+			return fail(stderr, "retrieve requires --session")
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		operatorID, err := identity.LoadOrCreate(root)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		defer database.Close()
+		records, snapshotID, err := retrieve.FromStore(context.Background(), database)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		scope := ""
+		if mode != "authoritative" || len(requested) > 0 {
+			scope = "query-" + retrieve.SafeSession(mode + "\x00" + strings.Join(requested, "\x00"))[:16]
+		}
+		safeSession := retrieve.SafeSession(sessionValue)
+		if !refresh {
+			cached, delivered, receiptErr := retrieve.Existing(root, safeSession, snapshotID, scope)
+			if receiptErr != nil {
+				return fail(stderr, receiptErr.Error())
+			}
+			if delivered {
+				response, _ := canonical.JSON(map[string]any{"status": "already_delivered", "snapshot_id": snapshotID, "payload": "", "selected_ids": []string{}})
+				fmt.Fprintln(stdout, string(response))
+				return 0
+			}
+			if cached != nil {
+				response, _ := canonical.JSON(cached)
+				fmt.Fprintln(stdout, string(response))
+				return 0
+			}
+		}
+		format := "compact"
+		if audit {
+			format = "audit"
+		}
+		result, err := retrieve.Retrieve(records, prompt, domain, requested, retrieve.Config{Budget: value.ContextBudgetBytes, AllowHigher: value.AllowHigherBudget, AuthorityMode: mode, OutputFormat: format})
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		responseMap := map[string]any{"status": "delivered", "snapshot_id": snapshotID, "payload": string(result.Payload), "selected_ids": result.SelectedIDs, "selected_bytes": result.SelectedBytes, "budget_bytes": result.BudgetBytes, "eligible_count": result.EligibleCount, "omitted_count": result.OmittedCount, "section_bytes": result.SectionBytes, "tokenizer_version": result.TokenizerVersion, "authority_mode": result.AuthorityMode, "requested_partitions": result.RequestedPartitions, "selected_by_partition": result.SelectedByPartition, "receipt_scope": nil}
+		if scope != "" {
+			responseMap["receipt_scope"] = scope
+		}
+		if !refresh {
+			responseMap, err = retrieve.Prepare(root, safeSession, snapshotID, scope, responseMap)
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+		}
+		response, _ := canonical.JSON(responseMap)
+		fmt.Fprintln(stdout, string(response))
+		if !refresh {
+			if flusher, ok := stdout.(interface{ Flush() error }); ok {
+				_ = flusher.Flush()
+			}
+			if _, err = retrieve.Commit(root, safeSession, snapshotID, scope); err != nil {
+				return fail(stderr, err.Error())
+			}
+		}
 		return 0
 	default:
 		return fail(stderr, fmt.Sprintf("unknown command %q", strings.TrimSpace(args[0])))

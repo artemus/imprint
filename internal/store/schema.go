@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS consumed_inputs (
  input_event_id TEXT PRIMARY KEY,payload_sha256 TEXT NOT NULL,
  consumed_at TEXT NOT NULL,source_path TEXT NOT NULL
 );
+CREATE TRIGGER IF NOT EXISTS content_generation_nodes_insert AFTER INSERT ON nodes BEGIN UPDATE meta SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='content_generation'; END;
+CREATE TRIGGER IF NOT EXISTS content_generation_node_versions_insert AFTER INSERT ON node_versions BEGIN UPDATE meta SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='content_generation'; END;
+CREATE TRIGGER IF NOT EXISTS content_generation_edges_insert AFTER INSERT ON edges BEGIN UPDATE meta SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='content_generation'; END;
+CREATE TRIGGER IF NOT EXISTS content_generation_edge_versions_insert AFTER INSERT ON edge_versions BEGIN UPDATE meta SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='content_generation'; END;
 CREATE TRIGGER IF NOT EXISTS node_version_authority_lattice_insert BEFORE INSERT ON node_versions
 WHEN NOT (
  (NEW.provenance_status='captured' AND NEW.authority_tier IN ('observed_candidate','captured_judgment','ratified_knowledge')) OR

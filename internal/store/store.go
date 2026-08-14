@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,85 @@ type LogItem struct {
 	ValidTime        string `json:"valid_time"`
 	ProvenanceStatus string `json:"provenance_status"`
 	NodeTypes        string `json:"node_types"`
+}
+
+type NodeRow struct {
+	NodeID, NodeType, OperatorID, VersionID, ProvenanceStatus, AuthorityTier, ValidFrom, ValidTo string
+	Payload                                                                                      map[string]any
+	Evidence                                                                                     []string
+}
+type EdgeRow struct{ EdgeType, SourceID, TargetID string }
+type RetrievalSnapshot struct {
+	Identity       string
+	Generation     int64
+	Nodes          []NodeRow
+	Edges          []EdgeRow
+	SourceReceipts map[string]bool
+}
+
+func (s *Store) RetrievalState(ctx context.Context) (RetrievalSnapshot, error) {
+	var result RetrievalSnapshot
+	var generation string
+	if err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='store_identity'").Scan(&result.Identity); err != nil {
+		return result, err
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='content_generation'").Scan(&generation); err != nil {
+		return result, err
+	}
+	parsed, err := strconv.ParseInt(generation, 10, 64)
+	if err != nil || parsed < 0 {
+		return result, errors.New("content generation metadata is invalid")
+	}
+	result.Generation = parsed
+	knownSemantic := false
+	_ = s.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='semantic_node_versions')").Scan(&knownSemantic)
+	query := `SELECT n.node_id,n.node_type,n.operator_id,nv.version_id,nv.payload_json,nv.provenance_status,nv.authority_tier,nv.evidence_json,nv.valid_from,COALESCE(nv.valid_to,'') FROM nodes n JOIN node_versions nv USING(node_id) WHERE nv.system_to IS NULL`
+	if knownSemantic {
+		query += ` AND NOT EXISTS(SELECT 1 FROM semantic_node_versions snv WHERE snv.version_id=nv.version_id)`
+	}
+	query += ` ORDER BY n.node_type,n.node_id`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item NodeRow
+		var payload, evidence string
+		if err = rows.Scan(&item.NodeID, &item.NodeType, &item.OperatorID, &item.VersionID, &payload, &item.ProvenanceStatus, &item.AuthorityTier, &evidence, &item.ValidFrom, &item.ValidTo); err != nil {
+			return result, err
+		}
+		if json.Unmarshal([]byte(payload), &item.Payload) != nil || json.Unmarshal([]byte(evidence), &item.Evidence) != nil {
+			continue
+		}
+		result.Nodes = append(result.Nodes, item)
+	}
+	edgeRows, err := s.db.QueryContext(ctx, `SELECT e.edge_type,e.source_id,e.target_id FROM edges e JOIN edge_versions ev USING(edge_id) WHERE ev.system_to IS NULL AND e.operator_id=? AND e.edge_type IN ('verdict_about_case','supported_by')`, s.operatorID)
+	if err != nil {
+		return result, err
+	}
+	defer edgeRows.Close()
+	for edgeRows.Next() {
+		var item EdgeRow
+		if err = edgeRows.Scan(&item.EdgeType, &item.SourceID, &item.TargetID); err != nil {
+			return result, err
+		}
+		result.Edges = append(result.Edges, item)
+	}
+	result.SourceReceipts = map[string]bool{}
+	receiptRows, err := s.db.QueryContext(ctx, `SELECT sr.source_id FROM source_receipts sr JOIN events e USING(event_id) WHERE e.operator_id=?`, s.operatorID)
+	if err != nil {
+		return result, err
+	}
+	defer receiptRows.Close()
+	for receiptRows.Next() {
+		var id string
+		if err = receiptRows.Scan(&id); err != nil {
+			return result, err
+		}
+		result.SourceReceipts[id] = true
+	}
+	return result, nil
 }
 
 func (s *Store) EventLog(ctx context.Context, day, query string, limit int) ([]LogItem, error) {
