@@ -76,6 +76,10 @@ func VerifyPinnedHead(chain VerifiedChain, sequence int64, eventSHA256 string) e
 // is non-nil, the supplied history must contain that destination-owned pin and
 // only its successors require re-verification.
 func VerifyCheckpointHistory(chain VerifiedChain, history []json.RawMessage, startingSHA *string, now time.Time) ([]CheckpointResult, error) {
+	return verifyCheckpointHistory(chain, history, startingSHA, now, true)
+}
+
+func verifyCheckpointHistory(chain VerifiedChain, history []json.RawMessage, startingSHA *string, now time.Time, enforceLatestFreshness bool) ([]CheckpointResult, error) {
 	if len(history) == 0 {
 		return nil, errors.New("authority checkpoint history is empty")
 	}
@@ -106,7 +110,7 @@ func VerifyCheckpointHistory(chain VerifiedChain, history []json.RawMessage, sta
 		if err != nil || !equalOptionalString(checkpoint.PriorCheckpointSHA256, prior) {
 			return nil, errors.New("authority checkpoint history does not extend local trust")
 		}
-		result, err := VerifyCheckpoint(chain, history[index], now, MaxCheckpointAge, index == len(history)-1)
+		result, err := VerifyCheckpoint(chain, history[index], now, MaxCheckpointAge, enforceLatestFreshness && index == len(history)-1)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +119,7 @@ func VerifyCheckpointHistory(chain VerifiedChain, history []json.RawMessage, sta
 		prior = &value
 	}
 	if start == len(history)-1 {
-		result, err := VerifyCheckpoint(chain, history[start], now, MaxCheckpointAge, true)
+		result, err := VerifyCheckpoint(chain, history[start], now, MaxCheckpointAge, enforceLatestFreshness)
 		if err != nil {
 			return nil, err
 		}
