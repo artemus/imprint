@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +96,32 @@ func TestCreateAuthorityCheckpointWrongPassphraseDoesNotAdvanceAnchor(t *testing
 	}
 	if _, err := database.CreateAuthorityCheckpoint(context.Background(), root, "wrong-passphrase", now.Add(time.Minute), authority.MaxCheckpointAge); err == nil {
 		t.Fatal("checkpoint accepted the wrong passphrase")
+	}
+	var pins int
+	if err := database.db.QueryRow(`SELECT COUNT(*) FROM authority_checkpoint_pins`).Scan(&pins); err != nil || pins != 1 {
+		t.Fatalf("pins=%d err=%v", pins, err)
+	}
+}
+
+func TestCreateAuthorityCheckpointBlockedByRecoveryJournal(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	operator, _ := urn.New("operator")
+	database, err := Open(filepath.Join(root, "imprint.db"), operator, "primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	event, privateKey, blob := storeEnrollmentFixture(t, database, operator)
+	now := time.Date(2026, 8, 14, 12, 15, 0, 0, time.UTC)
+	if _, err := database.EnrollAuthority(context.Background(), root, event, privateKey, blob, now); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(filepath.Dir(root), "offline", "recovery.json")
+	if _, err := authority.CreateRecoveryPublicationJournal(root, destination, "urn:imprint:authority-key:recovery", event.BlobSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateAuthorityCheckpoint(context.Background(), root, "fixture-passphrase", now.Add(time.Minute), authority.MaxCheckpointAge); err == nil || !strings.Contains(err.Error(), "unfinished recovery publication") {
+		t.Fatalf("err=%v", err)
 	}
 	var pins int
 	if err := database.db.QueryRow(`SELECT COUNT(*) FROM authority_checkpoint_pins`).Scan(&pins); err != nil || pins != 1 {

@@ -29,6 +29,13 @@ func (s *Store) CreateAuthorityCheckpoint(ctx context.Context, dataRoot, passphr
 	if err != nil {
 		return result, err
 	}
+	journal, err := authority.LoadRecoveryPublicationJournal(root)
+	if err != nil {
+		return result, err
+	}
+	if journal != nil {
+		return result, errors.New("unfinished recovery publication requires native reconciliation; retained destination=" + journal.Destination)
+	}
 	var privateKey ed25519.PrivateKey
 	defer func() { clear(privateKey) }()
 	returned = s.AuthorityTransaction(ctx, func(tx *sql.Tx) error {
