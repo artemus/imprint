@@ -60,6 +60,10 @@ type LedgerRow struct {
 
 type GenesisState struct {
 	OperatorID, StoreIdentity, HeadSHA256 string
+	CreatedAt                             string
+	AlgorithmSuite, BlobRelativePath      string
+	BlobSHA256                            string
+	BlobSize                              int64
 	Installation, Recovery                KeyCertificate
 	HasRecovery                           bool
 }
@@ -128,7 +132,13 @@ func VerifyGenesis(row LedgerRow, expectedOperatorID, expectedStoreIdentity stri
 	if err != nil || len(signature) != ed25519.SignatureSize || !ed25519.Verify(publicKey, message, signature) {
 		return GenesisState{}, errors.New("authority ledger signature is invalid")
 	}
-	state := GenesisState{OperatorID: event.OperatorID, StoreIdentity: event.StoreIdentity, HeadSHA256: digestText, Installation: KeyCertificate{KeyID: event.KeyID, PublicKeyB64: event.PublicKeyB64, PublicKeyFingerprint: event.PublicKeyFingerprint, InstallID: event.InstallID}}
+	state := GenesisState{
+		OperatorID: event.OperatorID, StoreIdentity: event.StoreIdentity,
+		HeadSHA256: digestText, CreatedAt: event.CreatedAt,
+		AlgorithmSuite: event.AlgorithmSuite, BlobRelativePath: event.BlobRelativePath,
+		BlobSHA256: event.BlobSHA256, BlobSize: event.BlobSize,
+		Installation: KeyCertificate{KeyID: event.KeyID, PublicKeyB64: event.PublicKeyB64, PublicKeyFingerprint: event.PublicKeyFingerprint, InstallID: event.InstallID},
+	}
 	if event.RecoveryBinding != nil {
 		state.Recovery, state.HasRecovery = *event.RecoveryBinding, true
 	}
