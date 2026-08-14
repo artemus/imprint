@@ -73,6 +73,29 @@ func TestVerifyCheckpointRejectsCertificateAndPriorHashTampering(t *testing.T) {
 	}
 }
 
+func TestSignCheckpointMatchesCanonicalContractAndKeyBinding(t *testing.T) {
+	genesis, row := signedGenesis(t)
+	chain, err := VerifyChain([]LedgerRow{row}, genesis.OperatorID, genesis.StoreIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 14, 12, 15, 0, 0, time.UTC)
+	checkpoint, err := SignCheckpoint(chain, genesis.KeyID, fixturePrivateKey(0), nil, now, MaxCheckpointAge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := signedCheckpoint(t, chain, 1, genesis.KeyID, fixturePrivateKey(0))
+	if checkpoint != expected {
+		t.Fatalf("checkpoint=%#v expected=%#v", checkpoint, expected)
+	}
+	if _, err := SignCheckpoint(chain, genesis.KeyID, fixturePrivateKey(1), nil, now, MaxCheckpointAge); err == nil {
+		t.Fatal("signed a checkpoint with a mismatched private key")
+	}
+	if _, err := SignCheckpoint(chain, genesis.KeyID, fixturePrivateKey(0), nil, now, MaxCheckpointAge+time.Second); err == nil {
+		t.Fatal("accepted an excessive checkpoint TTL")
+	}
+}
+
 func signedCheckpoint(t *testing.T, chain VerifiedChain, sequence int64, signerID string, privateKey ed25519.PrivateKey) Checkpoint {
 	t.Helper()
 	snapshot := chain.Snapshots[sequence]

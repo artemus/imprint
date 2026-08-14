@@ -3,6 +3,7 @@ package authority
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"time"
@@ -62,6 +63,48 @@ type CheckpointResult struct {
 
 var checkpointFields = []string{"checkpoint_version", "domain_separator", "operator_id", "store_identity", "sequence", "event_sha256", "genesis_event_sha256", "key_state_sha256", "prior_checkpoint_sha256", "signer_key_id", "signer_certificate", "issued_at", "expires_at", "signature_b64"}
 var signerCertificateFields = []string{"certificate_version", "key_id", "install_id", "public_key_b64", "public_key_fingerprint", "kind", "paired", "authorization_sequence", "authorization_event_sha256", "status_at_checkpoint"}
+
+// SignCheckpoint creates the Python-compatible checkpoint for the current
+// verified head and self-verifies the result before returning it.
+func SignCheckpoint(chain VerifiedChain, signerKeyID string, privateKey ed25519.PrivateKey, priorCheckpointSHA256 *string, now time.Time, ttl time.Duration) (Checkpoint, error) {
+	if ttl <= 0 || ttl > MaxCheckpointAge {
+		return Checkpoint{}, errors.New("authority checkpoint TTL must be within 24 hours")
+	}
+	signer, exists := chain.Keys[signerKeyID]
+	if !exists || signer.Status != "active" {
+		return Checkpoint{}, errors.New("authority checkpoint signer is not active")
+	}
+	snapshot, exists := chain.Snapshots[chain.HeadSequence]
+	if !exists || snapshot.EventSHA256 != chain.HeadSHA256 {
+		return Checkpoint{}, errors.New("authority chain head snapshot is missing")
+	}
+	issued := now.UTC()
+	checkpoint := Checkpoint{CheckpointUnsigned: CheckpointUnsigned{
+		CheckpointVersion: CheckpointVersion, DomainSeparator: CheckpointDomain,
+		OperatorID: chain.OperatorID, StoreIdentity: chain.StoreIdentity,
+		Sequence: chain.HeadSequence, EventSHA256: chain.HeadSHA256,
+		GenesisEventSHA256: chain.GenesisSHA256, KeyStateSHA256: snapshot.KeyStateSHA256,
+		PriorCheckpointSHA256: priorCheckpointSHA256, SignerKeyID: signerKeyID,
+		SignerCertificate: signerCertificate(signer), IssuedAt: utcText(issued),
+		ExpiresAt: utcText(issued.Add(ttl)),
+	}}
+	encoded, err := canonicalContract(checkpoint.CheckpointUnsigned)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return Checkpoint{}, errors.New("authority private key is invalid")
+	}
+	checkpoint.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, append([]byte(CheckpointDomain+"\x00"), encoded...)))
+	raw, err := canonicalContract(checkpoint)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if _, err := VerifyCheckpoint(chain, raw, issued, MaxCheckpointAge, true); err != nil {
+		return Checkpoint{}, err
+	}
+	return checkpoint, nil
+}
 
 // VerifyCheckpoint verifies a checkpoint against any retained chain sequence.
 // Set enforceFreshness false for offline historical verification.
