@@ -66,13 +66,9 @@ var signerCertificateFields = []string{"certificate_version", "key_id", "install
 // VerifyCheckpoint verifies a checkpoint against any retained chain sequence.
 // Set enforceFreshness false for offline historical verification.
 func VerifyCheckpoint(chain VerifiedChain, raw []byte, now time.Time, maxAge time.Duration, enforceFreshness bool) (CheckpointResult, error) {
-	var checkpoint Checkpoint
-	if decodeExactObject(raw, &checkpoint, checkpointFields) != nil {
-		return CheckpointResult{}, errors.New("authority checkpoint is malformed")
-	}
-	certificateRaw, err := rawObjectField(raw, "signer_certificate")
-	if err != nil || decodeExactObject(certificateRaw, &checkpoint.SignerCertificate, signerCertificateFields) != nil {
-		return CheckpointResult{}, errors.New("authority checkpoint signer certificate mismatch")
+	checkpoint, err := decodeCheckpoint(raw)
+	if err != nil {
+		return CheckpointResult{}, err
 	}
 	if checkpoint.CheckpointVersion != CheckpointVersion || checkpoint.DomainSeparator != CheckpointDomain {
 		return CheckpointResult{}, errors.New("authority checkpoint version is unsupported")
@@ -133,6 +129,18 @@ func VerifyCheckpoint(chain VerifiedChain, raw []byte, now time.Time, maxAge tim
 		SignerCertificate:     checkpoint.SignerCertificate,
 		CheckpointSHA256:      hex.EncodeToString(digest[:]),
 	}, nil
+}
+
+func decodeCheckpoint(raw []byte) (Checkpoint, error) {
+	var checkpoint Checkpoint
+	if decodeExactObject(raw, &checkpoint, checkpointFields) != nil {
+		return Checkpoint{}, errors.New("authority checkpoint is malformed")
+	}
+	certificateRaw, err := rawObjectField(raw, "signer_certificate")
+	if err != nil || decodeExactObject(certificateRaw, &checkpoint.SignerCertificate, signerCertificateFields) != nil {
+		return Checkpoint{}, errors.New("authority checkpoint signer certificate mismatch")
+	}
+	return checkpoint, nil
 }
 
 func signerCertificate(key ChainKey) SignerCertificate {
