@@ -1,11 +1,15 @@
 package authority
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestVerifyGenesisBindsRowDigestSignatureAndIdentity(t *testing.T) {
@@ -49,6 +53,55 @@ func TestVerifyGenesisAcceptsBoundRecoveryCertificate(t *testing.T) {
 	state, err := VerifyGenesis(row, event.OperatorID, event.StoreIdentity)
 	if err != nil || !state.HasRecovery || state.Recovery.KeyID != event.RecoveryBinding.KeyID {
 		t.Fatalf("state=%#v err=%v", state, err)
+	}
+}
+
+func TestInsertGenesisMaterializesCanonicalEnrollment(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if err := InitializeApprovalSchema(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	event, _ := signedGenesis(t)
+	privateKey := fixturePrivateKey(0)
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := InsertGenesis(context.Background(), tx, event, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := LoadVerifiedChain(context.Background(), tx, event.OperatorID, event.StoreIdentity)
+	if err != nil || chain.HeadSHA256 != row.EventSHA256 {
+		t.Fatalf("chain=%#v row=%#v err=%v", chain, row, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var keyID, status string
+	if err := db.QueryRow(`SELECT key_id,status FROM authority_keys`).Scan(&keyID, &status); err != nil || keyID != event.KeyID || status != "active" {
+		t.Fatalf("key=%s status=%s err=%v", keyID, status, err)
+	}
+	tx, _ = db.BeginTx(context.Background(), nil)
+	if _, err := InsertGenesis(context.Background(), tx, event, privateKey); err == nil {
+		t.Fatal("accepted a second enrollment")
+	}
+	_ = tx.Rollback()
+}
+
+func TestSignGenesisRejectsMismatchedPrivateKey(t *testing.T) {
+	event, expected := signedGenesis(t)
+	actual, err := SignGenesis(event, fixturePrivateKey(0))
+	if err != nil || actual != expected {
+		t.Fatalf("actual=%#v expected=%#v err=%v", actual, expected, err)
+	}
+	if _, err := SignGenesis(event, fixturePrivateKey(1)); err == nil {
+		t.Fatal("signed genesis with a private key outside its public binding")
 	}
 }
 
