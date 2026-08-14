@@ -143,3 +143,62 @@ func AssertAuthorityWritesAllowed(ctx context.Context, queryer rowQuerier) (Auth
 	}
 	return *anchor, nil
 }
+
+// PinLocalCheckpoint advances the destination-owned trust anchor to a locally
+// verified checkpoint. The pin and anchor update share the caller's transaction.
+func PinLocalCheckpoint(ctx context.Context, tx *sql.Tx, chain VerifiedChain, checkpoint Checkpoint, operationDigest string, now time.Time) (AuthorityTrustAnchor, error) {
+	anchor, err := AssertAuthorityWritesAllowed(ctx, tx)
+	if err != nil {
+		return AuthorityTrustAnchor{}, err
+	}
+	if operationDigest == "" {
+		return AuthorityTrustAnchor{}, errors.New("local checkpoint operation digest is empty")
+	}
+	if chain.OperatorID != anchor.OperatorID || chain.StoreIdentity != anchor.StoreIdentity || chain.GenesisSHA256 != anchor.GenesisEventSHA256 {
+		return AuthorityTrustAnchor{}, errors.New("local checkpoint belongs to another trust genesis")
+	}
+	if err := VerifyPinnedHead(chain, anchor.PinnedSequence, anchor.PinnedHeadSHA256); err != nil {
+		return AuthorityTrustAnchor{}, err
+	}
+	raw, err := canonicalContract(checkpoint)
+	if err != nil {
+		return AuthorityTrustAnchor{}, err
+	}
+	verified, err := VerifyCheckpoint(chain, raw, now.UTC(), MaxCheckpointAge, true)
+	if err != nil {
+		return AuthorityTrustAnchor{}, err
+	}
+	if verified.Sequence < anchor.PinnedSequence {
+		return AuthorityTrustAnchor{}, errors.New("local checkpoint would roll back the trusted head")
+	}
+	if verified.Sequence == anchor.PinnedSequence && verified.EventSHA256 != anchor.PinnedHeadSHA256 {
+		return AuthorityTrustAnchor{}, errors.New("local checkpoint equivocates at the trusted sequence")
+	}
+	if !equalOptionalString(checkpoint.PriorCheckpointSHA256, anchor.CheckpointSHA256) {
+		return AuthorityTrustAnchor{}, errors.New("local checkpoint does not extend the pinned checkpoint")
+	}
+	certificateSHA, err := canonicalValueSHA256(checkpoint.SignerCertificate)
+	if err != nil {
+		return AuthorityTrustAnchor{}, err
+	}
+	accepted := utcText(now)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO authority_checkpoint_pins(checkpoint_sha256,operator_id,store_identity,sequence,event_sha256,key_state_sha256,prior_checkpoint_sha256,signer_certificate_sha256,checkpoint_json,accepted_at,operation_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		verified.CheckpointSHA256, chain.OperatorID, chain.StoreIdentity, verified.Sequence,
+		verified.EventSHA256, verified.KeyStateSHA256, checkpoint.PriorCheckpointSHA256,
+		certificateSHA, string(raw), accepted, operationDigest); err != nil {
+		return AuthorityTrustAnchor{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE authority_trust_anchor SET pinned_sequence=?,pinned_head_sha256=?,key_state_sha256=?,checkpoint_sha256=?,checkpoint_json=?,signer_certificate_sha256=?,updated_at=? WHERE anchor_id=1`,
+		verified.Sequence, verified.EventSHA256, verified.KeyStateSHA256,
+		verified.CheckpointSHA256, string(raw), certificateSHA, accepted); err != nil {
+		return AuthorityTrustAnchor{}, err
+	}
+	stored, err := LoadTrustAnchor(ctx, tx)
+	if err != nil {
+		return AuthorityTrustAnchor{}, err
+	}
+	if stored == nil || stored.CheckpointSHA256 == nil || *stored.CheckpointSHA256 != verified.CheckpointSHA256 {
+		return AuthorityTrustAnchor{}, errors.New("local checkpoint trust anchor was not persisted")
+	}
+	return *stored, nil
+}
