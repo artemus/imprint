@@ -57,6 +57,41 @@ func TestAuthorityWritesRequireUnblockedTrust(t *testing.T) {
 	}
 }
 
+func TestEstablishTrustPersistsClosedCheckpointHistory(t *testing.T) {
+	db, genesis, privateKey := approvalDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	tx, _ := db.BeginTx(ctx, nil)
+	chain, err := LoadVerifiedChain(ctx, tx, genesis.OperatorID, genesis.StoreIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 14, 12, 15, 0, 0, time.UTC)
+	first, err := SignCheckpoint(chain, genesis.KeyID, privateKey, nil, now, MaxCheckpointAge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSHA, _ := canonicalValueSHA256(first)
+	second, err := SignCheckpoint(chain, genesis.KeyID, privateKey, &firstSHA, now.Add(time.Minute), MaxCheckpointAge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := EstablishTrustFromCheckpointHistory(ctx, tx, chain, nil, nil, []Checkpoint{first, second}, second, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anchor.CheckpointSHA256 == nil || *anchor.CheckpointSHA256 == firstSHA {
+		t.Fatalf("anchor=%#v", anchor)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var pins int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM authority_checkpoint_pins`).Scan(&pins); err != nil || pins != 2 {
+		t.Fatalf("pins=%d err=%v", pins, err)
+	}
+}
+
 func TestPinLocalCheckpointAdvancesAnchorAndRequiresExactPredecessor(t *testing.T) {
 	db, genesis, privateKey := approvalDatabase(t)
 	defer db.Close()

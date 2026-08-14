@@ -3,6 +3,7 @@ package authority
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -78,6 +79,10 @@ func LoadTrustAnchor(ctx context.Context, queryer rowQuerier) (*AuthorityTrustAn
 // EstablishEnrollmentTrust pins the first verified chain head and its initial
 // checkpoint. The caller owns the enrollment transaction.
 func EstablishEnrollmentTrust(ctx context.Context, tx *sql.Tx, chain VerifiedChain, recoveryKeyID, recoveryPublicKeyB64 *string, checkpoint Checkpoint, now time.Time) (AuthorityTrustAnchor, error) {
+	return EstablishTrustFromCheckpointHistory(ctx, tx, chain, recoveryKeyID, recoveryPublicKeyB64, []Checkpoint{checkpoint}, checkpoint, now)
+}
+
+func EstablishTrustFromCheckpointHistory(ctx context.Context, tx *sql.Tx, chain VerifiedChain, recoveryKeyID, recoveryPublicKeyB64 *string, history []Checkpoint, checkpoint Checkpoint, now time.Time) (AuthorityTrustAnchor, error) {
 	existing, err := LoadTrustAnchor(ctx, tx)
 	if err != nil {
 		return AuthorityTrustAnchor{}, err
@@ -88,20 +93,25 @@ func EstablishEnrollmentTrust(ctx context.Context, tx *sql.Tx, chain VerifiedCha
 	if err := ValidateRecoveryAnchor(chain, recoveryKeyID, recoveryPublicKeyB64); err != nil {
 		return AuthorityTrustAnchor{}, err
 	}
-	if checkpoint.PriorCheckpointSHA256 != nil {
-		return AuthorityTrustAnchor{}, errors.New("trust bootstrap checkpoint history is not closed")
+	if len(history) == 0 || history[len(history)-1] != checkpoint {
+		return AuthorityTrustAnchor{}, errors.New("trust bootstrap checkpoint history is inconsistent")
 	}
-	raw, err := canonicalContract(checkpoint)
+	historyRaw := make([]json.RawMessage, len(history))
+	for index, item := range history {
+		historyRaw[index], err = canonicalContract(item)
+		if err != nil {
+			return AuthorityTrustAnchor{}, err
+		}
+	}
+	verifiedHistory, err := VerifyCheckpointHistory(chain, historyRaw, nil, now.UTC())
 	if err != nil {
 		return AuthorityTrustAnchor{}, err
 	}
-	verified, err := VerifyCheckpoint(chain, raw, now.UTC(), MaxCheckpointAge, true)
-	if err != nil {
-		return AuthorityTrustAnchor{}, err
-	}
+	verified := verifiedHistory[len(verifiedHistory)-1]
+	raw := historyRaw[len(historyRaw)-1]
 	snapshot, exists := chain.Snapshots[chain.HeadSequence]
 	if !exists || verified.Sequence != chain.HeadSequence || verified.EventSHA256 != chain.HeadSHA256 || verified.KeyStateSHA256 != snapshot.KeyStateSHA256 {
-		return AuthorityTrustAnchor{}, errors.New("enrollment checkpoint does not pin the verified head")
+		return AuthorityTrustAnchor{}, errors.New("trust bootstrap checkpoint does not pin the verified head")
 	}
 	certificateSHA, err := canonicalValueSHA256(checkpoint.SignerCertificate)
 	if err != nil {
@@ -114,11 +124,18 @@ func EstablishEnrollmentTrust(ctx context.Context, tx *sql.Tx, chain VerifiedCha
 		verified.CheckpointSHA256, string(raw), certificateSHA, accepted); err != nil {
 		return AuthorityTrustAnchor{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO authority_checkpoint_pins(checkpoint_sha256,operator_id,store_identity,sequence,event_sha256,key_state_sha256,prior_checkpoint_sha256,signer_certificate_sha256,checkpoint_json,accepted_at,operation_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		verified.CheckpointSHA256, chain.OperatorID, chain.StoreIdentity, chain.HeadSequence,
-		chain.HeadSHA256, snapshot.KeyStateSHA256, nil, certificateSHA, string(raw), accepted,
-		"trust-bootstrap"); err != nil {
-		return AuthorityTrustAnchor{}, err
+	for index, item := range history {
+		itemVerified := verifiedHistory[index]
+		itemCertificateSHA, digestErr := canonicalValueSHA256(item.SignerCertificate)
+		if digestErr != nil {
+			return AuthorityTrustAnchor{}, digestErr
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO authority_checkpoint_pins(checkpoint_sha256,operator_id,store_identity,sequence,event_sha256,key_state_sha256,prior_checkpoint_sha256,signer_certificate_sha256,checkpoint_json,accepted_at,operation_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			itemVerified.CheckpointSHA256, chain.OperatorID, chain.StoreIdentity, itemVerified.Sequence,
+			itemVerified.EventSHA256, itemVerified.KeyStateSHA256, item.PriorCheckpointSHA256,
+			itemCertificateSHA, string(historyRaw[index]), accepted, "trust-bootstrap"); err != nil {
+			return AuthorityTrustAnchor{}, err
+		}
 	}
 	stored, err := LoadTrustAnchor(ctx, tx)
 	if err != nil {
