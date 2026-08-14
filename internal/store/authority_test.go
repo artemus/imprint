@@ -106,6 +106,118 @@ BEGIN INSERT INTO authority_commit_failure VALUES('missing'); END;
 	}
 }
 
+func TestEnrollAuthorityWithRecoveryPublishesBundleBeforeActivation(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	dataRoot := filepath.Join(root, "data")
+	destination := filepath.Join(root, "offline", "recovery.json")
+	operator, _ := urn.New("operator")
+	database, err := Open(filepath.Join(dataRoot, "imprint.db"), operator, "primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	plan, now := storeRecoveryEnrollmentFixture(t, database, operator)
+	defer plan.Clear()
+	result, err := database.EnrollAuthorityWithRecovery(
+		context.Background(), dataRoot, plan.Event, plan.PrivateKey, plan.KeyBlob,
+		RecoveryEnrollmentPublication{Destination: destination, EncryptedRecoveryKey: plan.EncryptedRecoveryKey}, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RecoveryBundle == nil || result.Trust.RecoveryKeyID == nil || *result.Trust.RecoveryKeyID != plan.Event.RecoveryBinding.KeyID {
+		t.Fatalf("result=%#v", result)
+	}
+	raw, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := authority.VerifyRecoveryBundle(raw, now, true)
+	if err != nil || verified.Manifest.RecoveryKeyID != plan.Event.RecoveryBinding.KeyID {
+		t.Fatalf("verified=%#v err=%v", verified, err)
+	}
+	if journal, err := authority.LoadRecoveryPublicationJournal(dataRoot); err != nil || journal != nil {
+		t.Fatalf("journal=%#v err=%v", journal, err)
+	}
+}
+
+func TestRecoveryEnrollmentRetainsJournalAndBundleWhenCommitFails(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	dataRoot := filepath.Join(root, "data")
+	destination := filepath.Join(root, "offline", "recovery.json")
+	operator, _ := urn.New("operator")
+	database, err := Open(filepath.Join(dataRoot, "imprint.db"), operator, "primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.db.Exec(`
+CREATE TABLE recovery_commit_guard(id TEXT PRIMARY KEY);
+CREATE TABLE recovery_commit_failure(id TEXT REFERENCES recovery_commit_guard(id) DEFERRABLE INITIALLY DEFERRED);
+CREATE TRIGGER recovery_test_deferred_failure AFTER INSERT ON authority_checkpoint_pins
+BEGIN INSERT INTO recovery_commit_failure VALUES('missing'); END;
+`); err != nil {
+		t.Fatal(err)
+	}
+	plan, now := storeRecoveryEnrollmentFixture(t, database, operator)
+	defer plan.Clear()
+	if _, err := database.EnrollAuthorityWithRecovery(
+		context.Background(), dataRoot, plan.Event, plan.PrivateKey, plan.KeyBlob,
+		RecoveryEnrollmentPublication{Destination: destination, EncryptedRecoveryKey: plan.EncryptedRecoveryKey}, now,
+	); err == nil {
+		t.Fatal("accepted recovery enrollment whose SQLite commit failed")
+	}
+	journal, err := authority.LoadRecoveryPublicationJournal(dataRoot)
+	if err != nil || journal == nil || journal.Destination != destination {
+		t.Fatalf("journal=%#v err=%v", journal, err)
+	}
+	if raw, err := os.ReadFile(destination); err != nil {
+		t.Fatal("external recovery bundle was not retained:", err)
+	} else if _, err := authority.VerifyRecoveryBundle(raw, now, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dataRoot, filepath.FromSlash(plan.Event.BlobRelativePath))); !os.IsNotExist(err) {
+		t.Fatalf("uncommitted machine key remained active: %v", err)
+	}
+	quarantined, _ := filepath.Glob(filepath.Join(dataRoot, "authority", "quarantine", "orphan-*.blob"))
+	if len(quarantined) != 1 {
+		t.Fatalf("quarantined=%v", quarantined)
+	}
+	var ledger, keys, anchors, pins int
+	if err := database.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM authority_ledger),
+		(SELECT COUNT(*) FROM authority_keys),
+		(SELECT COUNT(*) FROM authority_trust_anchor),
+		(SELECT COUNT(*) FROM authority_checkpoint_pins)`,
+	).Scan(&ledger, &keys, &anchors, &pins); err != nil {
+		t.Fatal(err)
+	}
+	if ledger != 0 || keys != 0 || anchors != 0 || pins != 0 {
+		t.Fatalf("ledger=%d keys=%d anchors=%d pins=%d", ledger, keys, anchors, pins)
+	}
+}
+
+func storeRecoveryEnrollmentFixture(t *testing.T, database *Store, operator string) (authority.RecoveryEnrollmentPlan, time.Time) {
+	t.Helper()
+	storeIdentity, err := database.Identity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	randomBytes := make([]byte, 264)
+	for index := range randomBytes {
+		randomBytes[index] = byte(index)
+	}
+	now := time.Date(2026, 8, 14, 12, 15, 0, 0, time.UTC)
+	plan, err := authority.PrepareEnrollmentWithRecovery(
+		operator, storeIdentity, "authority-passphrase", "recovery-passphrase",
+		now, bytes.NewReader(randomBytes),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan, now
+}
+
 func storeEnrollmentFixture(t *testing.T, database *Store, operator string) (authority.GenesisEvent, ed25519.PrivateKey, []byte) {
 	t.Helper()
 	key, err := authority.GenerateKey(bytes.NewReader(make([]byte, 32)))
