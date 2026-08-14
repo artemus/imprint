@@ -14,7 +14,9 @@ type AuthorityTrustAnchor struct {
 	PinnedSequence                                int64
 	PinnedHeadSHA256, KeyStateSHA256              string
 	CheckpointSHA256                              *string
+	Checkpoint                                    *Checkpoint
 	SignerCertificateSHA256                       *string
+	UpdatedAt                                     string
 	WritesBlocked                                 bool
 	BlockReason                                   *string
 }
