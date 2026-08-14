@@ -32,6 +32,45 @@ type Store struct {
 	db                       *sql.DB
 }
 
+type LogItem struct {
+	EventID          string `json:"event_id"`
+	EventType        string `json:"event_type"`
+	SystemTime       string `json:"system_time"`
+	ValidTime        string `json:"valid_time"`
+	ProvenanceStatus string `json:"provenance_status"`
+	NodeTypes        string `json:"node_types"`
+}
+
+func (s *Store) EventLog(ctx context.Context, day, query string, limit int) ([]LogItem, error) {
+	if limit < 1 || limit > 200 {
+		return nil, errors.New("log limit must be 1..200")
+	}
+	if _, err := time.Parse("2006-01-02", day); err != nil {
+		return nil, errors.New("log date must be YYYY-MM-DD")
+	}
+	pattern := "%" + strings.TrimSpace(query) + "%"
+	rows, err := s.db.QueryContext(ctx, `SELECT e.event_id,e.event_type,e.system_time,e.valid_time,e.provenance_status,COALESCE(GROUP_CONCAT(n.node_type,','),'') FROM events e LEFT JOIN nodes n ON n.created_event_id=e.event_id WHERE substr(e.system_time,1,10)=? AND (?='' OR e.event_type LIKE ? OR e.event_id LIKE ?) GROUP BY e.event_id ORDER BY e.system_time DESC,e.event_id DESC LIMIT ?`, day, strings.TrimSpace(query), pattern, pattern, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LogItem{}
+	for rows.Next() {
+		var item LogItem
+		if err = rows.Scan(&item.EventID, &item.EventType, &item.SystemTime, &item.ValidTime, &item.ProvenanceStatus, &item.NodeTypes); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) Integrity(ctx context.Context) (string, error) {
+	var result string
+	err := s.db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&result)
+	return result, err
+}
+
 func Open(path, operatorID, nodeID string) (*Store, error) {
 	if err := privateio.EnsureDir(filepath.Dir(path)); err != nil {
 		return nil, err

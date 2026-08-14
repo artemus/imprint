@@ -87,4 +87,15 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(operatorRoot, "imprint.db")); err != nil {
 		t.Fatal(err)
 	}
+	for _, command := range [][]string{{"whoami"}, {"health", "--deep"}, {"log", "--date", strings.Split(envelope.CapturedAt, "T")[0]}} {
+		stdout.Reset()
+		stderr.Reset()
+		arguments := append([]string{"--config", configPath}, command...)
+		if code := Run(arguments, &stdout, &stderr); code != 0 {
+			t.Fatalf("%v code=%d stderr=%s", command, code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), `"status":`) {
+			t.Fatalf("%v stdout=%s", command, stdout.String())
+		}
+	}
 }

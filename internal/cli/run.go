@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/artemus/imprint/internal/buildinfo"
 	"github.com/artemus/imprint/internal/canonical"
@@ -28,6 +30,9 @@ Commands:
   config    validate and print resolved public configuration
   capture   validate and durably queue a raw capture envelope
   compile   compile queued captures into canonical SQLite state
+  whoami    print the configured opaque local identity
+  log       list a bounded UTC-day canonical event index
+  health    verify configuration and canonical store integrity
 `
 
 func Run(args []string, stdout, stderr io.Writer) int {
@@ -133,6 +138,108 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		if counts.Quarantined > 0 {
 			return 2
 		}
+		return 0
+	case "whoami":
+		if len(args) != 1 {
+			return fail(stderr, "whoami accepts no arguments")
+		}
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		operatorID, err := identity.LoadOrCreate(root)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		response, _ := canonical.JSON(map[string]string{"status": "ok", "operator_id": operatorID, "node_id": value.NodeID})
+		fmt.Fprintln(stdout, string(response))
+		return 0
+	case "log":
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		operatorID, err := identity.LoadOrCreate(root)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		day := time.Now().UTC().Format("2006-01-02")
+		limit := 100
+		query := ""
+		for index := 1; index < len(args); index += 2 {
+			if index+1 >= len(args) {
+				return fail(stderr, "log options require values")
+			}
+			switch args[index] {
+			case "--date":
+				day = args[index+1]
+			case "--query":
+				query = args[index+1]
+			case "--limit":
+				limit, err = strconv.Atoi(args[index+1])
+				if err != nil {
+					return fail(stderr, "log limit must be an integer")
+				}
+			default:
+				return fail(stderr, "unknown log option "+args[index])
+			}
+		}
+		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		defer database.Close()
+		items, err := database.EventLog(context.Background(), day, query, limit)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		response, _ := canonical.JSON(map[string]any{"status": "ok", "date": day, "limit": limit, "count": len(items), "items": items})
+		fmt.Fprintln(stdout, string(response))
+		return 0
+	case "health":
+		deep := false
+		if len(args) == 2 && args[1] == "--deep" {
+			deep = true
+		} else if len(args) != 1 {
+			return fail(stderr, "health accepts only --deep")
+		}
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		operatorID, err := identity.LoadOrCreate(root)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		defer database.Close()
+		integrity := "not_requested"
+		if deep {
+			integrity, err = database.Integrity(context.Background())
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			if integrity != "ok" {
+				return fail(stderr, "store integrity check failed: "+integrity)
+			}
+		}
+		response, _ := canonical.JSON(map[string]any{"status": "healthy", "store": "compatible", "integrity": integrity, "compiler": value.Compiler, "hook_timeout_seconds": value.HookTimeoutSeconds})
+		fmt.Fprintln(stdout, string(response))
 		return 0
 	default:
 		return fail(stderr, fmt.Sprintf("unknown command %q", strings.TrimSpace(args[0])))
