@@ -35,6 +35,7 @@ Commands:
   capture   validate and durably queue a raw capture envelope
   compile   compile queued captures into canonical SQLite state
   spool     prune only acknowledged inputs owned by this producer
+  store     explicitly recover crash-resident SQLite WAL state
   whoami    print the configured opaque local identity
   log       list a bounded UTC-day canonical event index
   health    verify configuration and canonical store integrity
@@ -172,6 +173,25 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return fail(stderr, err.Error())
 		}
 		response, _ := canonical.JSON(map[string]any{"status": "ok", "deleted": counts.Deleted, "retained": counts.Retained, "already_pruned": counts.AlreadyPruned, "acknowledgements_deleted": counts.AcknowledgementsDeleted, "quarantine_deleted": counts.QuarantineDeleted, "invalid": counts.Invalid})
+		fmt.Fprintln(stdout, string(response))
+		return 0
+	case "store":
+		if len(args) != 2 || args[1] != "recover" {
+			return fail(stderr, "store requires recover")
+		}
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		result, err := store.Recover(context.Background(), filepath.Join(root, "imprint.db"))
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		response, _ := canonical.JSON(result)
 		fmt.Fprintln(stdout, string(response))
 		return 0
 	case "whoami":

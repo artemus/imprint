@@ -161,6 +161,14 @@ func Open(path, operatorID, nodeID string) (*Store, error) {
 	} else if err != nil {
 		return nil, err
 	}
+	if existing {
+		if _, err := requireRegularStore(path); err != nil {
+			return nil, err
+		}
+		if err := rejectAmbiguousSQLiteState(path); err != nil {
+			return nil, err
+		}
+	}
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=rwc")
 	if err != nil {
 		return nil, err
@@ -205,20 +213,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) requireCompatible(ctx context.Context) error {
-	var storeVersion, ontologyVersion string
-	if err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='store_schema_version'").Scan(&storeVersion); err != nil {
-		return errors.New("existing store is missing store_schema_version")
-	}
-	if err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='ontology_schema_version'").Scan(&ontologyVersion); err != nil {
-		return errors.New("existing store is missing ontology_schema_version")
-	}
-	if storeVersion != StoreSchemaVersion {
-		return fmt.Errorf("incompatible store schema %q", storeVersion)
-	}
-	if ontologyVersion != OntologySchemaVersion {
-		return fmt.Errorf("incompatible ontology schema %q", ontologyVersion)
-	}
-	return nil
+	return requireCompatibleConnection(ctx, s.db)
 }
 
 func (s *Store) ApplyCapture(ctx context.Context, envelope capture.Envelope, sourcePath string) (result string, returned error) {

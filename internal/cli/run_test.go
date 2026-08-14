@@ -95,6 +95,14 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(operatorRoot, "imprint.db")); err != nil {
 		t.Fatal(err)
 	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"--config", configPath, "store", "recover"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("store recover code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"status":"clean"`) || !strings.Contains(stdout.String(), `"integrity":"ok"`) {
+		t.Fatalf("store recover stdout=%s", stdout.String())
+	}
 	for _, command := range [][]string{{"whoami"}, {"health", "--deep"}, {"log", "--date", strings.Split(envelope.CapturedAt, "T")[0]}} {
 		stdout.Reset()
 		stderr.Reset()
