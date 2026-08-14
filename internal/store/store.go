@@ -152,6 +152,17 @@ func (s *Store) Integrity(ctx context.Context) (string, error) {
 	return result, err
 }
 
+func (s *Store) Identity(ctx context.Context) (string, error) {
+	var identity string
+	if err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='store_identity'`).Scan(&identity); err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(identity, "urn:imprint:store:") {
+		return "", errors.New("store identity is corrupt")
+	}
+	return identity, nil
+}
+
 func Open(path, operatorID, nodeID string) (*Store, error) {
 	if err := privateio.EnsureDir(filepath.Dir(path)); err != nil {
 		return nil, err
