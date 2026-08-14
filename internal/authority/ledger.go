@@ -147,6 +147,25 @@ func validateCertificate(value KeyCertificate) error {
 	return nil
 }
 
+func canonicalLedgerEvent(raw string) (map[string]any, []byte, string, error) {
+	var document map[string]any
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&document); err != nil {
+		return nil, nil, "", err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, nil, "", errors.New("authority ledger event contains trailing JSON")
+	}
+	encoded, err := canonicalContract(document)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return document, encoded, hex.EncodeToString(digest[:]), nil
+}
+
 func safeRelativeBlobPath(value string) bool {
 	portable := strings.ReplaceAll(value, `\`, "/")
 	if portable == "" || strings.HasPrefix(portable, "/") || (len(portable) >= 2 && portable[1] == ':') {
