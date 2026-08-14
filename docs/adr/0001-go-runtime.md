@@ -10,11 +10,27 @@ Imprint will move to a statically linked Go executable while preserving the
 existing Python runtime remains a behavioral oracle during migration and is
 removed only after the parity suite passes on macOS, Linux, and Windows.
 
-The target architecture has five internal packages: `config`, `capture`,
-`store`, `authority`, and `cli`. Projections, ingest, retrieval, migrations,
-backup, and purge are thin operations over `store`; hook actions invoke the same
-application services as CLI actions. SQLite remains canonical and the existing
-schema is opened in place—there is no destructive store conversion.
+Package boundaries follow stable contracts rather than a fixed package count.
+Small validation and rendering packages may sit beside `config`, `capture`,
+`store`, `authority`, and `cli`, while orchestration stays thin and shared by
+hooks and CLI actions. SQLite remains canonical and the existing schema is
+opened in place—there is no destructive store conversion.
+
+## Migration method
+
+This is an incremental replacement, not a blanket rewrite.
+
+1. Port one bounded workflow only after its public inputs, outputs, side effects,
+   and failure policy are covered by compatibility tests.
+2. Keep the Python implementation as the reference and fallback until that
+   workflow passes cross-platform parity; do not redesign adjacent subsystems as
+   part of the port.
+3. Preserve existing schemas and durable artifacts. Prefer adapters around the
+   canonical store to parallel models or conversion layers.
+4. Extract shared orchestration only after repetition exists, and keep security
+   checks close to the boundary they protect.
+5. Remove Python surfaces only in the final packaging checkpoint, after every
+   compatibility gate below passes.
 
 ## Why Go
 

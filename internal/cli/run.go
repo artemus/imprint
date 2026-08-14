@@ -17,13 +17,9 @@ import (
 	"github.com/artemus/imprint/internal/capture"
 	"github.com/artemus/imprint/internal/compiler"
 	"github.com/artemus/imprint/internal/config"
-	"github.com/artemus/imprint/internal/derive"
 	"github.com/artemus/imprint/internal/domain"
 	"github.com/artemus/imprint/internal/identity"
 	"github.com/artemus/imprint/internal/paths"
-	"github.com/artemus/imprint/internal/privateio"
-	"github.com/artemus/imprint/internal/projection"
-	"github.com/artemus/imprint/internal/proposal"
 	"github.com/artemus/imprint/internal/retrieve"
 	"github.com/artemus/imprint/internal/session"
 	"github.com/artemus/imprint/internal/spool"
@@ -208,138 +204,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, string(response))
 		return 0
 	case "export":
-		format, output := "", ""
-		for index := 1; index < len(args); index += 2 {
-			if index+1 >= len(args) {
-				return fail(stderr, "export options require values")
-			}
-			switch args[index] {
-			case "--format":
-				format = args[index+1]
-			case "--output":
-				output = args[index+1]
-			default:
-				return fail(stderr, "unknown export option "+args[index])
-			}
-		}
-		if format != "markdown" {
-			return fail(stderr, "native export currently supports --format markdown")
-		}
-		value, err := config.Load(configPath)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		root, err := paths.OperatorRoot(value)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		operatorID, err := identity.LoadOrCreate(root)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		defer database.Close()
-		snapshot, err := database.ProjectionState(context.Background())
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		content := projection.Markdown(snapshot)
-		if output == "" {
-			fmt.Fprint(stdout, content)
-			return 0
-		}
-		absolute, err := filepath.Abs(output)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		if err = privateio.PublishNew(absolute, []byte(content)); err != nil {
-			return fail(stderr, err.Error())
-		}
-		response, _ := canonical.JSON(map[string]string{"status": "exported", "path": absolute})
-		fmt.Fprintln(stdout, string(response))
-		return 0
+		return runExport(args, configPath, stdout, stderr)
 	case "derive":
-		if len(args) < 2 || (args[1] != "--pending" && args[1] != "--submit" && args[1] != "--capture") {
-			return fail(stderr, "derive requires --submit PATH, --capture PATH, or --pending")
-		}
-		if (args[1] == "--pending" && len(args) != 2) || (args[1] != "--pending" && len(args) != 3) {
-			return fail(stderr, "derive input option requires a path")
-		}
-		value, err := config.Load(configPath)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		root, err := paths.OperatorRoot(value)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		if args[1] == "--submit" {
-			raw, err := os.ReadFile(args[2])
-			if err != nil {
-				return fail(stderr, err.Error())
-			}
-			candidate, err := proposal.Decode(raw)
-			if err != nil {
-				return fail(stderr, err.Error())
-			}
-			proposalID, err := derive.Submit(root, candidate)
-			if err != nil {
-				return fail(stderr, err.Error())
-			}
-			response, _ := canonical.JSON(map[string]string{"status": "queued", "proposal_id": proposalID})
-			fmt.Fprintln(stdout, string(response))
-			return 0
-		}
-		operatorID, err := identity.LoadOrCreate(root)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		if args[1] == "--capture" {
-			raw, err := os.ReadFile(args[2])
-			if err != nil {
-				return fail(stderr, err.Error())
-			}
-			envelope, err := capture.Decode(raw)
-			if err != nil {
-				return fail(stderr, err.Error())
-			}
-			if envelope.OperatorID != operatorID || envelope.NodeID != value.NodeID {
-				return fail(stderr, "capture operator/node does not match configured identity")
-			}
-			candidate, err := proposal.FromCapture(envelope, "imprint-reference-deriver")
-			if err != nil {
-				return fail(stderr, err.Error())
-			}
-			proposalID, err := derive.Submit(root, candidate)
-			if err != nil {
-				return fail(stderr, err.Error())
-			}
-			response, _ := canonical.JSON(map[string]string{"status": "queued", "proposal_id": proposalID, "producer": "imprint-reference-deriver"})
-			fmt.Fprintln(stdout, string(response))
-			return 0
-		}
-		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		defer database.Close()
-		counts, err := derive.Compile(context.Background(), root, database)
-		if err != nil {
-			return fail(stderr, err.Error())
-		}
-		status := "ok"
-		if counts.Rejected > 0 {
-			status = "degraded"
-		}
-		response, _ := canonical.JSON(map[string]any{"status": status, "applied": counts.Applied, "duplicates": counts.Duplicates, "rejected": counts.Rejected, "skipped": counts.Skipped, "failures": counts.Failures})
-		fmt.Fprintln(stdout, string(response))
-		if counts.Rejected > 0 {
-			return 2
-		}
-		return 0
+		return runDerive(args, configPath, stdout, stderr)
 	case "whoami":
 		if len(args) != 1 {
 			return fail(stderr, "whoami accepts no arguments")
