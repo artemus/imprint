@@ -7,15 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"time"
 
 	"github.com/artemus/imprint/internal/authority"
 	"github.com/artemus/imprint/internal/canonical"
 	"github.com/artemus/imprint/internal/ceremony"
-	"github.com/artemus/imprint/internal/config"
-	"github.com/artemus/imprint/internal/identity"
-	"github.com/artemus/imprint/internal/paths"
 	"github.com/artemus/imprint/internal/store"
 )
 
@@ -33,19 +29,11 @@ func runAuthorityEnrollment(ctx context.Context, configPath, recoveryDestination
 	if err := console.RequireNative(processInput); err != nil {
 		return fail(stderr, err.Error())
 	}
-	value, err := config.Load(configPath)
+	runtime, err := loadRuntime(configPath, true)
 	if err != nil {
 		return fail(stderr, err.Error())
 	}
-	root, err := paths.OperatorRoot(value)
-	if err != nil {
-		return fail(stderr, err.Error())
-	}
-	operatorID, err := identity.LoadOrCreate(root)
-	if err != nil {
-		return fail(stderr, err.Error())
-	}
-	database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+	database, err := runtime.openStore()
 	if err != nil {
 		return fail(stderr, err.Error())
 	}
@@ -55,15 +43,15 @@ func runAuthorityEnrollment(ctx context.Context, configPath, recoveryDestination
 		return fail(stderr, err.Error())
 	}
 	if recoveryDestination != "" {
-		return performRecoveryEnrollment(ctx, root, operatorID, storeIdentity, recoveryDestination, database, stdout, stderr, console, now, random)
+		return performRecoveryEnrollment(ctx, runtime.Root, runtime.OperatorID, storeIdentity, recoveryDestination, database, stdout, stderr, console, now, random)
 	}
-	enrollmentIdentity, err := authority.NewEnrollmentIdentity(operatorID, storeIdentity, random)
+	enrollmentIdentity, err := authority.NewEnrollmentIdentity(runtime.OperatorID, storeIdentity, random)
 	if err != nil {
 		return fail(stderr, err.Error())
 	}
 	if err := console.Write(fmt.Sprintf(
 		"\nImprint authority enrollment\nOperator: %s\nInstallation: %s\nStore: %s\nLosing the passphrase and every recovery path permanently removes the ability to preserve authority.\n",
-		operatorID, enrollmentIdentity.InstallID, storeIdentity,
+		runtime.OperatorID, enrollmentIdentity.InstallID, storeIdentity,
 	)); err != nil {
 		return fail(stderr, err.Error())
 	}
@@ -84,12 +72,12 @@ func runAuthorityEnrollment(ctx context.Context, configPath, recoveryDestination
 		return fail(stderr, err.Error())
 	}
 	defer plan.Clear()
-	result, err := database.EnrollAuthority(ctx, root, plan.Event, plan.PrivateKey, plan.KeyBlob, now)
+	result, err := database.EnrollAuthority(ctx, runtime.Root, plan.Event, plan.PrivateKey, plan.KeyBlob, now)
 	if err != nil {
 		return fail(stderr, err.Error())
 	}
 	response, err := canonical.JSON(map[string]any{
-		"status": "enrolled", "operator_id": operatorID,
+		"status": "enrolled", "operator_id": runtime.OperatorID,
 		"install_id": enrollmentIdentity.InstallID, "store_identity": storeIdentity,
 		"key_id": plan.Event.KeyID, "public_key_fingerprint": plan.Event.PublicKeyFingerprint,
 		"ledger_sequence": int64(1), "ledger_event_sha256": result.LedgerRow.EventSHA256,

@@ -7,23 +7,17 @@ import (
 	"github.com/artemus/imprint/internal/authority"
 	"github.com/artemus/imprint/internal/canonical"
 	"github.com/artemus/imprint/internal/ceremony"
-	"github.com/artemus/imprint/internal/config"
-	"github.com/artemus/imprint/internal/paths"
 )
 
 func runAuthorityRecoveryReconcile(configPath string, processInput io.Reader, stdout, stderr io.Writer, console ceremony.Console) int {
 	if err := console.RequireNative(processInput); err != nil {
 		return fail(stderr, err.Error())
 	}
-	value, err := config.Load(configPath)
+	runtime, err := loadRuntime(configPath, false)
 	if err != nil {
 		return fail(stderr, err.Error())
 	}
-	root, err := paths.OperatorRoot(value)
-	if err != nil {
-		return fail(stderr, err.Error())
-	}
-	journal, err := authority.LoadRecoveryPublicationJournal(root)
+	journal, err := authority.LoadRecoveryPublicationJournal(runtime.Root)
 	if err != nil {
 		return fail(stderr, err.Error())
 	}
@@ -37,7 +31,7 @@ func runAuthorityRecoveryReconcile(configPath string, processInput io.Reader, st
 	if err := confirmExactTransition(console, "interrupted recovery abandonment", "ABANDON INTERRUPTED RECOVERY", encoded); err != nil {
 		return fail(stderr, err.Error())
 	}
-	if err := authority.ClearRecoveryPublicationJournal(root, *journal); err != nil {
+	if err := authority.ClearRecoveryPublicationJournal(runtime.Root, *journal); err != nil {
 		return fail(stderr, err.Error())
 	}
 	response, err := canonical.JSON(map[string]string{

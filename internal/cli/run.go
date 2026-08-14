@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/artemus/imprint/internal/authority"
 	"github.com/artemus/imprint/internal/buildinfo"
 	"github.com/artemus/imprint/internal/canonical"
 	"github.com/artemus/imprint/internal/capture"
@@ -216,8 +217,24 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			recoveryDestination = args[3]
 		} else if len(args) == 2 && args[1] == "recovery-reconcile" {
 			return runAuthorityRecoveryReconcile(configPath, stdin, stdout, stderr, ceremony.NativeConsole{})
+		} else if len(args) >= 2 && args[1] == "checkpoint" {
+			seconds := int(authority.MaxCheckpointAge / time.Second)
+			if len(args) == 4 && args[2] == "--ttl-seconds" {
+				parsed, err := strconv.Atoi(args[3])
+				if err != nil {
+					return fail(stderr, "authority checkpoint ttl-seconds must be an integer")
+				}
+				seconds = parsed
+			} else if len(args) != 2 {
+				return fail(stderr, "authority checkpoint accepts only --ttl-seconds SECONDS")
+			}
+			ttl, err := checkpointTTL(seconds)
+			if err != nil {
+				return fail(stderr, err.Error())
+			}
+			return runAuthorityCheckpoint(context.Background(), configPath, ttl, stdin, stdout, stderr, ceremony.NativeConsole{}, time.Now().UTC())
 		} else if len(args) != 2 || args[1] != "enroll" {
-			return fail(stderr, "authority requires enroll [--recovery-output PATH] or recovery-reconcile")
+			return fail(stderr, "authority requires enroll, checkpoint, or recovery-reconcile")
 		}
 		return runAuthorityEnrollment(context.Background(), configPath, recoveryDestination, stdin, stdout, stderr, ceremony.NativeConsole{}, time.Now().UTC(), rand.Reader)
 	case "whoami":
