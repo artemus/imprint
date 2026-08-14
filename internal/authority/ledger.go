@@ -71,6 +71,12 @@ type GenesisState struct {
 	HasRecovery                           bool
 }
 
+// CanonicalGenesisTransition returns the exact bytes shown to the operator
+// before a recovery-bound genesis is signed and committed.
+func CanonicalGenesisTransition(event GenesisEvent) ([]byte, error) {
+	return canonicalContract(event)
+}
+
 // SignGenesis creates the exact canonical row committed at enrollment. The
 // result is verified before it can reach SQLite, including the private/public
 // key binding carried by the signature.

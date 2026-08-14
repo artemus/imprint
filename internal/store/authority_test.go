@@ -70,6 +70,31 @@ func TestEnrollAuthorityRollsBackDatabaseWhenPublicationConflicts(t *testing.T) 
 	}
 }
 
+func TestEnrollAuthorityRejectsLegacyAuthorityWithoutLedger(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	operator, _ := urn.New("operator")
+	database, err := Open(filepath.Join(root, "canonical", "imprint.db"), operator, "primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.db.Exec(`
+INSERT INTO events VALUES('event','capture',?,'2026-08-14T12:00:00Z','2026-08-14T12:00:00Z','{}','hash',NULL,'verified');
+INSERT INTO nodes VALUES('node','judgment',?,'event');
+INSERT INTO node_versions VALUES('version','node','{}','hash','captured','captured_judgment','{}','[]','2026-08-14T12:00:00Z',NULL,'2026-08-14T12:00:00Z',NULL,'event',NULL);
+`, operator, operator); err != nil {
+		t.Fatal(err)
+	}
+	event, privateKey, blob := storeEnrollmentFixture(t, database, operator)
+	if _, err := database.EnrollAuthority(context.Background(), root, event, privateKey, blob, time.Now()); err == nil || err.Error() != "store has authority-bearing data but no verifiable authority ledger" {
+		t.Fatalf("err=%v", err)
+	}
+	var ledger int
+	if err := database.db.QueryRow(`SELECT COUNT(*) FROM authority_ledger`).Scan(&ledger); err != nil || ledger != 0 {
+		t.Fatalf("ledger=%d err=%v", ledger, err)
+	}
+}
+
 func TestEnrollAuthorityQuarantinesPublishedKeyWhenCommitFails(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	operator, _ := urn.New("operator")
