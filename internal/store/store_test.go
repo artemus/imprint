@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -56,5 +58,35 @@ func TestOpenRejectsIncompatibleStore(t *testing.T) {
 	database.Close()
 	if _, err = Open(path, operator, "primary"); err == nil {
 		t.Fatal("accepted incompatible schema")
+	}
+}
+
+func TestOpenInitializesAuthoritySchemaAndRollsBackFailedMutation(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	operator, _ := urn.New("operator")
+	path := filepath.Join(root, "imprint.db")
+	database, err := Open(path, operator, "primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var table string
+	if err := database.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='authority_provenance'`).Scan(&table); err != nil || table != "authority_provenance" {
+		t.Fatalf("table=%s err=%v", table, err)
+	}
+	want := errors.New("mutation failed")
+	err = database.AuthorityTransaction(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO authority_challenges VALUES('nonce','operation','challenge','issued','expires',NULL,NULL)`)
+		if err != nil {
+			return err
+		}
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("err=%v", err)
+	}
+	var count int
+	if err := database.db.QueryRow(`SELECT COUNT(*) FROM authority_challenges`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("count=%d err=%v", count, err)
 	}
 }

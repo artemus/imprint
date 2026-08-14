@@ -19,6 +19,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 	_ "modernc.org/sqlite"
 
+	"github.com/artemus/imprint/internal/authority"
 	"github.com/artemus/imprint/internal/canonical"
 	"github.com/artemus/imprint/internal/capture"
 	"github.com/artemus/imprint/internal/privateio"
@@ -169,7 +170,7 @@ func Open(path, operatorID, nodeID string) (*Store, error) {
 			return nil, err
 		}
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=rwc")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=rwc&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +185,10 @@ func Open(path, operatorID, nodeID string) (*Store, error) {
 	if _, err = db.Exec(captureSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize store: %w", err)
+	}
+	if err = authority.InitializeApprovalSchema(context.Background(), db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("initialize authority store: %w", err)
 	}
 	storeID, _ := urn.New("store")
 	for key, item := range map[string]string{"store_schema_version": StoreSchemaVersion, "ontology_schema_version": OntologySchemaVersion, "store_identity": storeID} {
@@ -201,6 +206,27 @@ func Open(path, operatorID, nodeID string) (*Store, error) {
 		return nil, err
 	}
 	return value, nil
+}
+
+// AuthorityTransaction runs an authority-sensitive mutation under SQLite's
+// immediate write lock and commits only when the callback succeeds.
+func (s *Store) AuthorityTransaction(ctx context.Context, mutate func(*sql.Tx) error) (returned error) {
+	if mutate == nil {
+		return errors.New("authority mutation callback is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if returned != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := mutate(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error {
