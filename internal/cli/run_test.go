@@ -14,7 +14,7 @@ import (
 
 func TestVersion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"version"}, &stdout, &stderr); code != 0 {
+	if code := Run([]string{"version"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "3.2.0-dev") {
@@ -24,7 +24,7 @@ func TestVersion(t *testing.T) {
 
 func TestUnknownCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"nope"}, &stdout, &stderr); code != 2 {
+	if code := Run([]string{"nope"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
 		t.Fatalf("code=%d", code)
 	}
 	if !strings.Contains(stderr.String(), "unknown command") {
@@ -63,7 +63,7 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"--config", configPath, "capture", "--event", eventPath}, &stdout, &stderr); code != 0 {
+	if code := Run([]string{"--config", configPath, "capture", "--event", eventPath}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"status":"queued"`) {
@@ -78,7 +78,7 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run([]string{"--config", configPath, "compile", "--once"}, &stdout, &stderr); code != 0 {
+	if code := Run([]string{"--config", configPath, "compile", "--once"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("compile code=%d stderr=%s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"captured":1`) {
@@ -91,11 +91,51 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 		stdout.Reset()
 		stderr.Reset()
 		arguments := append([]string{"--config", configPath}, command...)
-		if code := Run(arguments, &stdout, &stderr); code != 0 {
+		if code := Run(arguments, strings.NewReader(""), &stdout, &stderr); code != 0 {
 			t.Fatalf("%v code=%d stderr=%s", command, code, stderr.String())
 		}
 		if !strings.Contains(stdout.String(), `"status":`) {
 			t.Fatalf("%v stdout=%s", command, stdout.String())
 		}
+	}
+}
+
+func TestStopHookPersistsBeforeReturningQueued(t *testing.T) {
+	temporary, _ := filepath.EvalSymlinks(t.TempDir())
+	dataRoot := filepath.Join(temporary, "data")
+	configPath := filepath.Join(temporary, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"data_root":"`+dataRoot+`","operator_slug":"hook-test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	event := `{"hook_event_name":"Stop","session_id":"native-private-id","operator_text":"No, use the compact version instead.","case_description":"Reviewing a draft"}`
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--config", configPath, "hook", "stop-capture"}, strings.NewReader(event), &stdout, &stderr); code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"canonical_status":"compiled"`) {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+	root := filepath.Join(dataRoot, "hook-test")
+	entries, err := filepath.Glob(filepath.Join(root, "spool", "primary", "*.json"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries=%v err=%v", entries, err)
+	}
+	key, err := os.ReadFile(filepath.Join(root, "session-map.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(key), "native-private-id") {
+		t.Fatal("native session id persisted")
+	}
+}
+
+func TestRepeatedStopFailureDoesNotLoop(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	event := `{"hook_schema_version":"9.0.0","stop_hook_active":true}`
+	if code := Run([]string{"hook", "stop-capture"}, strings.NewReader(event), &stdout, &stderr); code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	if !strings.Contains(stdout.String(), `"failure_policy":"fail_closed"`) {
+		t.Fatalf("stdout=%s", stdout.String())
 	}
 }

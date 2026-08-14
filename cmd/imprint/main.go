@@ -6,4 +6,4 @@ import (
 	"github.com/artemus/imprint/internal/cli"
 )
 
-func main() { os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() { os.Exit(cli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }

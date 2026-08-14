@@ -19,6 +19,7 @@ import (
 	"github.com/artemus/imprint/internal/config"
 	"github.com/artemus/imprint/internal/identity"
 	"github.com/artemus/imprint/internal/paths"
+	"github.com/artemus/imprint/internal/session"
 	"github.com/artemus/imprint/internal/spool"
 	"github.com/artemus/imprint/internal/store"
 )
@@ -33,9 +34,10 @@ Commands:
   whoami    print the configured opaque local identity
   log       list a bounded UTC-day canonical event index
   health    verify configuration and canonical store integrity
+  hook      execute a native Claude Code hook action
 `
 
-func Run(args []string, stdout, stderr io.Writer) int {
+func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	configPath := ""
 	if len(args) >= 2 && args[0] == "--config" {
 		configPath, args = args[1], args[2:]
@@ -241,6 +243,94 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		response, _ := canonical.JSON(map[string]any{"status": "healthy", "store": "compatible", "integrity": integrity, "compiler": value.Compiler, "hook_timeout_seconds": value.HookTimeoutSeconds})
 		fmt.Fprintln(stdout, string(response))
 		return 0
+	case "hook":
+		if len(args) != 2 || args[1] != "stop-capture" {
+			return fail(stderr, "native hook currently requires stop-capture")
+		}
+		var event map[string]any
+		decoder := json.NewDecoder(stdin)
+		if err := decoder.Decode(&event); err != nil {
+			return hookFailure(stdout, stderr, "hook_input_invalid", false, true)
+		}
+		stopActive, _ := event["stop_hook_active"].(bool)
+		if schema, ok := event["hook_schema_version"]; ok && schema != "1.0.0" {
+			return hookFailure(stdout, stderr, "unsupported hook_schema_version", stopActive, true)
+		}
+		if name, ok := event["hook_event_name"]; ok && name != "Stop" {
+			return hookFailure(stdout, stderr, "hook_event_name_invalid", stopActive, true)
+		}
+		value, err := config.Load(configPath)
+		if err != nil {
+			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
+		}
+		operatorID, err := identity.LoadOrCreate(root)
+		if err != nil {
+			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
+		}
+		nativeSession, ok := stringField(event, "session_id", "sessionId")
+		if !ok {
+			nativeSession = "unavailable-event:" + time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		sessionID, err := session.OpaqueURN(root, nativeSession)
+		if err != nil {
+			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
+		}
+		operatorText, ok := stringField(event, "operator_text", "last_user_message")
+		if !ok || strings.TrimSpace(operatorText) == "" {
+			response, _ := canonical.JSON(map[string]any{"hook_schema_version": "1.0.0", "status": "skipped", "reason": "feedback_text_unavailable"})
+			fmt.Fprintln(stdout, string(response))
+			return 0
+		}
+		priorOperator, _ := stringField(event, "prior_operator_text")
+		priorAssistant, _ := stringField(event, "prior_assistant_output")
+		detection := capture.Detect(operatorText, priorOperator, priorAssistant)
+		if !detection.IsFeedback {
+			response, _ := canonical.JSON(map[string]any{"hook_schema_version": "1.0.0", "status": "skipped", "reason": "not_explicit_feedback"})
+			fmt.Fprintln(stdout, string(response))
+			return 0
+		}
+		caseDescription, _ := stringField(event, "case_description")
+		if strings.TrimSpace(caseDescription) == "" {
+			caseDescription = "Explicit operator feedback witnessed by explicit hook input"
+		}
+		var reason *string
+		if text, ok := stringField(event, "reason"); ok {
+			reason = &text
+		}
+		envelope, err := capture.Build(capture.BuildOptions{OperatorID: operatorID, SessionID: sessionID, NodeID: value.NodeID, CaseDescription: caseDescription, RawOperatorText: operatorText, CallType: detection.CallType, CaptureMechanism: "claude_code_stop_hook", CapturedBy: "imprint-hook", Reason: reason})
+		if err != nil {
+			return hookFailure(stdout, stderr, "hook_action_failed", stopActive, true)
+		}
+		spoolPath, err := spool.Write(root, envelope)
+		if err != nil {
+			return hookFailure(stdout, stderr, "spool_write_failed", stopActive, true)
+		}
+		receipt := map[string]any{"hook_schema_version": "1.0.0", "status": "queued", "event_id": envelope.InputEventID, "spool_file": filepath.Base(spoolPath), "canonical_status": "spool_only"}
+		if value.Compiler {
+			database, openErr := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+			if openErr != nil {
+				receipt["compile_status"] = "degraded"
+				receipt["compile_error_type"] = "StoreOpenError"
+			} else {
+				counts, compileErr := compiler.Compile(context.Background(), root, database)
+				_ = database.Close()
+				if compileErr != nil {
+					receipt["compile_status"] = "degraded"
+					receipt["compile_error_type"] = "CompilerError"
+				} else {
+					receipt["canonical_status"] = "compiled"
+					receipt["compile_status"] = "healthy"
+					receipt["compile"] = counts
+				}
+			}
+		}
+		response, _ := canonical.JSON(receipt)
+		fmt.Fprintln(stdout, string(response))
+		return 0
 	default:
 		return fail(stderr, fmt.Sprintf("unknown command %q", strings.TrimSpace(args[0])))
 	}
@@ -249,4 +339,26 @@ func Run(args []string, stdout, stderr io.Writer) int {
 func fail(stderr io.Writer, message string) int {
 	fmt.Fprintf(stderr, "imprint: %s\n", message)
 	return 2
+}
+
+func hookFailure(stdout, stderr io.Writer, message string, stopActive, captureLost bool) int {
+	policy := "fail_open"
+	if captureLost {
+		policy = "fail_closed"
+	}
+	response, _ := canonical.JSON(map[string]any{"hook_schema_version": "1.0.0", "status": "degraded", "error": message, "hook_action": "stop-capture", "failure_policy": policy})
+	fmt.Fprintln(stdout, string(response))
+	fmt.Fprintln(stderr, "Imprint Stop capture failed: "+message)
+	if captureLost && !stopActive {
+		return 2
+	}
+	return 0
+}
+func stringField(value map[string]any, names ...string) (string, bool) {
+	for _, name := range names {
+		if item, ok := value[name].(string); ok {
+			return item, true
+		}
+	}
+	return "", false
 }
