@@ -24,6 +24,11 @@ type EnrollmentIdentity struct {
 	OperatorID, StoreIdentity, InstallID string
 }
 
+type RecoveryEnrollmentPlan struct {
+	EnrollmentPlan
+	EncryptedRecoveryKey []byte
+}
+
 // Clear releases the prepared private-key bytes as soon as the enrollment
 // transaction no longer needs them.
 func (plan *EnrollmentPlan) Clear() {
@@ -111,4 +116,91 @@ func PrepareEnrollmentForIdentity(identity EnrollmentIdentity, passphrase string
 	digest := sha256.Sum256(blob)
 	event.BlobSHA256, event.BlobSize = hex.EncodeToString(digest[:]), int64(len(blob))
 	return EnrollmentPlan{Event: event, PrivateKey: key.PrivateKey, KeyBlob: blob}, nil
+}
+
+// PrepareEnrollmentWithRecovery binds distinct machine and recovery keys at
+// genesis. The recovery private key is cleared before this function returns.
+func PrepareEnrollmentWithRecovery(operatorID, storeIdentity, authorityPassphrase, recoveryPassphrase string, now time.Time, random io.Reader) (RecoveryEnrollmentPlan, error) {
+	if authorityPassphrase == recoveryPassphrase {
+		return RecoveryEnrollmentPlan{}, errors.New("recovery passphrase must differ from the authority passphrase")
+	}
+	if random == nil {
+		random = rand.Reader
+	}
+	identity, err := NewEnrollmentIdentity(operatorID, storeIdentity, random)
+	if err != nil {
+		return RecoveryEnrollmentPlan{}, err
+	}
+	machine, err := GenerateKey(random)
+	if err != nil {
+		return RecoveryEnrollmentPlan{}, err
+	}
+	recovery, err := GenerateKey(random)
+	if err != nil {
+		clear(machine.PrivateKey)
+		return RecoveryEnrollmentPlan{}, err
+	}
+	defer clear(recovery.PrivateKey)
+	if machine.KeyID == recovery.KeyID {
+		clear(machine.PrivateKey)
+		return RecoveryEnrollmentPlan{}, errors.New("authority genesis key identities collide")
+	}
+	recoveryInstallRandom := make([]byte, 32)
+	nonceRandom := make([]byte, 32)
+	if _, err := io.ReadFull(random, recoveryInstallRandom); err != nil {
+		clear(machine.PrivateKey)
+		return RecoveryEnrollmentPlan{}, errors.New("authority enrollment randomness failed")
+	}
+	if _, err := io.ReadFull(random, nonceRandom); err != nil {
+		clear(machine.PrivateKey)
+		return RecoveryEnrollmentPlan{}, errors.New("authority enrollment randomness failed")
+	}
+	eventUUID, err := uuid.NewRandomFromReader(random)
+	if err != nil {
+		clear(machine.PrivateKey)
+		return RecoveryEnrollmentPlan{}, errors.New("authority enrollment randomness failed")
+	}
+	createdAt := utcText(now)
+	machinePublicB64 := base64.StdEncoding.EncodeToString(machine.PublicKey)
+	recoveryPublicB64 := base64.StdEncoding.EncodeToString(recovery.PublicKey)
+	recoveryInstallID := "urn:imprint:recovery:" + hex.EncodeToString(recoveryInstallRandom)
+	event := GenesisEvent{
+		ContractVersion: GenesisEventVersion, DomainSeparator: LedgerDomain,
+		Sequence: 1, EventID: "urn:imprint:authority-event:" + eventUUID.String(), EventType: "enrollment",
+		OperatorID: operatorID, InstallID: identity.InstallID, StoreIdentity: storeIdentity,
+		KeyID: machine.KeyID, PublicKeyB64: machinePublicB64, PublicKeyFingerprint: machine.Fingerprint,
+		AlgorithmSuite: AlgorithmSuite, EnrollmentNonce: base64.RawURLEncoding.EncodeToString(nonceRandom),
+		BlobRelativePath: "authority/keys/" + strings.TrimPrefix(machine.Fingerprint, "sha256:") + ".blob",
+		Status:           "active", CreatedAt: createdAt,
+		RecoveryBinding: &KeyCertificate{
+			KeyID: recovery.KeyID, PublicKeyB64: recoveryPublicB64,
+			PublicKeyFingerprint: recovery.Fingerprint, InstallID: recoveryInstallID,
+		},
+	}
+	machineBlob, err := EncryptPrivateKey(machine.PrivateKey, authorityPassphrase, KeyAAD{
+		OperatorID: operatorID, InstallID: identity.InstallID, StoreIdentity: storeIdentity,
+		KeyID: machine.KeyID, PublicKeyB64: machinePublicB64, PublicKeyFingerprint: machine.Fingerprint,
+		CreatedAt: createdAt, AlgorithmSuite: AlgorithmSuite, LedgerSequence: 1,
+		EnrollmentNonce: event.EnrollmentNonce,
+	}, random)
+	if err != nil {
+		clear(machine.PrivateKey)
+		return RecoveryEnrollmentPlan{}, err
+	}
+	recoveryManifest := RecoveryManifest{
+		OperatorID: operatorID, StoreIdentity: storeIdentity, CreatedAt: createdAt,
+		RecoveryKeyID: recovery.KeyID, RecoveryPublicKeyB64: recoveryPublicB64,
+		RecoveryPublicKeyFingerprint: recovery.Fingerprint, RecoveryInstallID: recoveryInstallID,
+	}
+	encryptedRecovery, err := EncryptRecoveryKey(recovery.PrivateKey, recoveryPassphrase, recoveryManifest, random)
+	if err != nil {
+		clear(machine.PrivateKey)
+		return RecoveryEnrollmentPlan{}, err
+	}
+	digest := sha256.Sum256(machineBlob)
+	event.BlobSHA256, event.BlobSize = hex.EncodeToString(digest[:]), int64(len(machineBlob))
+	return RecoveryEnrollmentPlan{
+		EnrollmentPlan:       EnrollmentPlan{Event: event, PrivateKey: machine.PrivateKey, KeyBlob: machineBlob},
+		EncryptedRecoveryKey: encryptedRecovery,
+	}, nil
 }
