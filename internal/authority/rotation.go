@@ -13,6 +13,7 @@ const LifecycleEventVersion = "imprint.authority.ledger-event/1.1.0"
 type ChainKey struct {
 	KeyCertificate
 	Kind, Status, AlgorithmSuite, BlobRelativePath, BlobSHA256 string
+	Paired                                                     bool
 	BlobSize                                                   int64
 	CertificateSequence                                        int64
 	CertificateEventSHA256                                     string
@@ -61,7 +62,7 @@ func BeginChain(row LedgerRow, expectedOperatorID, expectedStoreIdentity string)
 		return ChainState{}, err
 	}
 	state := ChainState{OperatorID: genesis.OperatorID, StoreIdentity: genesis.StoreIdentity, HeadSHA256: genesis.HeadSHA256, HeadSequence: 1, Keys: map[string]ChainKey{}}
-	state.Keys[genesis.Installation.KeyID] = ChainKey{KeyCertificate: genesis.Installation, Kind: "installation", Status: "active", AlgorithmSuite: genesis.AlgorithmSuite, BlobRelativePath: genesis.BlobRelativePath, BlobSHA256: genesis.BlobSHA256, BlobSize: genesis.BlobSize, CertificateSequence: 1, CertificateEventSHA256: genesis.HeadSHA256, EffectiveAt: genesis.CreatedAt}
+	state.Keys[genesis.Installation.KeyID] = ChainKey{KeyCertificate: genesis.Installation, Kind: "installation", Status: "active", Paired: true, AlgorithmSuite: genesis.AlgorithmSuite, BlobRelativePath: genesis.BlobRelativePath, BlobSHA256: genesis.BlobSHA256, BlobSize: genesis.BlobSize, CertificateSequence: 1, CertificateEventSHA256: genesis.HeadSHA256, EffectiveAt: genesis.CreatedAt}
 	if genesis.HasRecovery {
 		state.Keys[genesis.Recovery.KeyID] = ChainKey{KeyCertificate: genesis.Recovery, Kind: "recovery", Status: "active", CertificateSequence: 1, CertificateEventSHA256: genesis.HeadSHA256, EffectiveAt: genesis.CreatedAt}
 	}
@@ -95,7 +96,7 @@ func VerifyRotation(prior ChainState, row LedgerRow) (ChainState, error) {
 	retired.Status = "retired"
 	retired.EffectiveAt = event.CreatedAt
 	next.Keys[signer.KeyID] = retired
-	next.Keys[certificate.KeyID] = ChainKey{KeyCertificate: certificate, Kind: "installation", Status: "active", AlgorithmSuite: details.AlgorithmSuite, BlobRelativePath: details.BlobRelativePath, BlobSHA256: details.BlobSHA256, BlobSize: details.BlobSize, CertificateSequence: event.Sequence, CertificateEventSHA256: digest, EffectiveAt: event.CreatedAt}
+	next.Keys[certificate.KeyID] = ChainKey{KeyCertificate: certificate, Kind: "installation", Status: "active", Paired: true, AlgorithmSuite: details.AlgorithmSuite, BlobRelativePath: details.BlobRelativePath, BlobSHA256: details.BlobSHA256, BlobSize: details.BlobSize, CertificateSequence: event.Sequence, CertificateEventSHA256: digest, EffectiveAt: event.CreatedAt}
 	return next, nil
 }
 
