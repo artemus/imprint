@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -46,10 +45,9 @@ func (s *Store) enrollAuthority(ctx context.Context, dataRoot string, event auth
 	if event.OperatorID != s.operatorID {
 		return result, errors.New("authority enrollment does not match the configured operator")
 	}
-	root := filepath.Clean(dataRoot)
-	relativeStore, err := filepath.Rel(root, s.path)
-	if strings.TrimSpace(dataRoot) == "" || !filepath.IsAbs(root) || err != nil || relativeStore == ".." || strings.HasPrefix(relativeStore, ".."+string(filepath.Separator)) {
-		return result, errors.New("authority enrollment data root does not own the canonical store")
+	root, err := s.ownedAuthorityDataRoot(dataRoot)
+	if err != nil {
+		return result, err
 	}
 	var published authority.PublishedKey
 	publishedActive := false

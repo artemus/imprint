@@ -64,6 +64,10 @@ type CheckpointResult struct {
 var checkpointFields = []string{"checkpoint_version", "domain_separator", "operator_id", "store_identity", "sequence", "event_sha256", "genesis_event_sha256", "key_state_sha256", "prior_checkpoint_sha256", "signer_key_id", "signer_certificate", "issued_at", "expires_at", "signature_b64"}
 var signerCertificateFields = []string{"certificate_version", "key_id", "install_id", "public_key_b64", "public_key_fingerprint", "kind", "paired", "authorization_sequence", "authorization_event_sha256", "status_at_checkpoint"}
 
+func CanonicalCheckpoint(checkpoint Checkpoint) ([]byte, error) {
+	return canonicalContract(checkpoint)
+}
+
 // SignCheckpoint creates the Python-compatible checkpoint for the current
 // verified head and self-verifies the result before returning it.
 func SignCheckpoint(chain VerifiedChain, signerKeyID string, privateKey ed25519.PrivateKey, priorCheckpointSHA256 *string, now time.Time, ttl time.Duration) (Checkpoint, error) {

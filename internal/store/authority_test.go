@@ -45,6 +45,81 @@ func TestEnrollAuthorityCommitsGenesisTrustAndPublishedKey(t *testing.T) {
 	}
 }
 
+func TestCreateAuthorityCheckpointUnlocksSignsAndPins(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	operator, _ := urn.New("operator")
+	database, err := Open(filepath.Join(root, "imprint.db"), operator, "primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	event, privateKey, blob := storeEnrollmentFixture(t, database, operator)
+	now := time.Date(2026, 8, 14, 12, 15, 0, 0, time.UTC)
+	if _, err := database.EnrollAuthority(context.Background(), root, event, privateKey, blob, now); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := database.CreateAuthorityCheckpoint(context.Background(), root, "fixture-passphrase", now.Add(time.Minute), authority.MaxCheckpointAge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Sequence != 1 || checkpoint.PriorCheckpointSHA256 == nil {
+		t.Fatalf("checkpoint=%#v", checkpoint)
+	}
+	anchor, err := authority.LoadTrustAnchor(context.Background(), database.db)
+	if err != nil || anchor == nil || anchor.CheckpointSHA256 == nil {
+		t.Fatalf("anchor=%#v err=%v", anchor, err)
+	}
+	raw, _ := authority.CanonicalCheckpoint(checkpoint)
+	verified, err := authority.VerifyCheckpoint(mustStoreChain(t, database, operator), raw, now.Add(time.Minute), authority.MaxCheckpointAge, true)
+	if err != nil || verified.CheckpointSHA256 != *anchor.CheckpointSHA256 {
+		t.Fatalf("verified=%#v anchor=%#v err=%v", verified, anchor, err)
+	}
+	var pins int
+	if err := database.db.QueryRow(`SELECT COUNT(*) FROM authority_checkpoint_pins`).Scan(&pins); err != nil || pins != 2 {
+		t.Fatalf("pins=%d err=%v", pins, err)
+	}
+}
+
+func TestCreateAuthorityCheckpointWrongPassphraseDoesNotAdvanceAnchor(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	operator, _ := urn.New("operator")
+	database, err := Open(filepath.Join(root, "imprint.db"), operator, "primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	event, privateKey, blob := storeEnrollmentFixture(t, database, operator)
+	now := time.Date(2026, 8, 14, 12, 15, 0, 0, time.UTC)
+	if _, err := database.EnrollAuthority(context.Background(), root, event, privateKey, blob, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateAuthorityCheckpoint(context.Background(), root, "wrong-passphrase", now.Add(time.Minute), authority.MaxCheckpointAge); err == nil {
+		t.Fatal("checkpoint accepted the wrong passphrase")
+	}
+	var pins int
+	if err := database.db.QueryRow(`SELECT COUNT(*) FROM authority_checkpoint_pins`).Scan(&pins); err != nil || pins != 1 {
+		t.Fatalf("pins=%d err=%v", pins, err)
+	}
+}
+
+func mustStoreChain(t *testing.T, database *Store, operator string) authority.VerifiedChain {
+	t.Helper()
+	tx, err := database.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	identity, err := database.Identity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := authority.LoadVerifiedChain(context.Background(), tx, operator, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chain
+}
+
 func TestEnrollAuthorityRollsBackDatabaseWhenPublicationConflicts(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	operator, _ := urn.New("operator")
