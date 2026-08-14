@@ -3,6 +3,7 @@ package authority
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -74,7 +75,7 @@ func VerifyPinnedHead(chain VerifiedChain, sequence int64, eventSHA256 string) e
 // VerifyCheckpointHistory verifies a closed checkpoint chain. If startingSHA
 // is non-nil, the supplied history must contain that destination-owned pin and
 // only its successors require re-verification.
-func VerifyCheckpointHistory(chain VerifiedChain, history [][]byte, startingSHA *string, now time.Time) ([]CheckpointResult, error) {
+func VerifyCheckpointHistory(chain VerifiedChain, history []json.RawMessage, startingSHA *string, now time.Time) ([]CheckpointResult, error) {
 	if len(history) == 0 {
 		return nil, errors.New("authority checkpoint history is empty")
 	}
@@ -123,7 +124,7 @@ func VerifyCheckpointHistory(chain VerifiedChain, history [][]byte, startingSHA 
 	return results, nil
 }
 
-func VerifyTransfer(chain VerifiedChain, anchor AuthorityTrustAnchor, history [][]byte, now time.Time) (VerifiedTransfer, error) {
+func VerifyTransfer(chain VerifiedChain, anchor AuthorityTrustAnchor, history []json.RawMessage, now time.Time) (VerifiedTransfer, error) {
 	if anchor.WritesBlocked {
 		return VerifiedTransfer{}, errors.New("local authority trust is blocked pending adjudication")
 	}

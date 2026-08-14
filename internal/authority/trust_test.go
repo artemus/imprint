@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -51,24 +52,24 @@ func TestVerifyTransferExtendsDestinationCheckpointHistory(t *testing.T) {
 		CheckpointSHA256: &digest1, SignerCertificateSHA256: &certificateSHA,
 	}
 	now := time.Date(2026, 8, 14, 12, 30, 0, 0, time.UTC)
-	transfer, err := VerifyTransfer(chain, anchor, [][]byte{raw1, raw2}, now)
+	transfer, err := VerifyTransfer(chain, anchor, []json.RawMessage{raw1, raw2}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if transfer.Checkpoint.Sequence != 2 || transfer.CheckpointSHA256 == digest1 || transfer.PriorAnchorSHA256 == "" {
 		t.Fatalf("transfer=%#v", transfer)
 	}
-	if _, err = VerifyTransfer(chain, anchor, [][]byte{raw2}, now); err == nil {
+	if _, err = VerifyTransfer(chain, anchor, []json.RawMessage{raw2}, now); err == nil {
 		t.Fatal("accepted history that omitted the destination pin")
 	}
 	checkpoint2.PriorCheckpointSHA256 = nil
 	checkpoint2 = resignCheckpoint(t, checkpoint2, fixturePrivateKey(32))
 	brokenRaw, _ := canonicalContract(checkpoint2)
-	if _, err = VerifyTransfer(chain, anchor, [][]byte{raw1, brokenRaw}, now); err == nil {
+	if _, err = VerifyTransfer(chain, anchor, []json.RawMessage{raw1, brokenRaw}, now); err == nil {
 		t.Fatal("accepted checkpoint history with a broken link")
 	}
 	anchor.PinnedHeadSHA256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-	if _, err = VerifyTransfer(chain, anchor, [][]byte{raw1, raw2}, now); err == nil {
+	if _, err = VerifyTransfer(chain, anchor, []json.RawMessage{raw1, raw2}, now); err == nil {
 		t.Fatal("accepted a chain that forked from the pinned head")
 	}
 }
@@ -82,14 +83,14 @@ func TestVerifyCheckpointHistoryBootstrapsOnlyClosedHistory(t *testing.T) {
 	checkpoint := signedCheckpoint(t, chain, 1, genesis.KeyID, fixturePrivateKey(0))
 	raw, _ := canonicalContract(checkpoint)
 	now := time.Date(2026, 8, 14, 12, 30, 0, 0, time.UTC)
-	results, err := VerifyCheckpointHistory(chain, [][]byte{raw}, nil, now)
+	results, err := VerifyCheckpointHistory(chain, []json.RawMessage{raw}, nil, now)
 	if err != nil || len(results) != 1 || results[0].Sequence != 1 {
 		t.Fatalf("results=%#v err=%v", results, err)
 	}
 	checkpoint.PriorCheckpointSHA256 = stringPointer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	checkpoint = resignCheckpoint(t, checkpoint, fixturePrivateKey(0))
 	raw, _ = canonicalContract(checkpoint)
-	if _, err = VerifyCheckpointHistory(chain, [][]byte{raw}, nil, now); err == nil {
+	if _, err = VerifyCheckpointHistory(chain, []json.RawMessage{raw}, nil, now); err == nil {
 		t.Fatal("accepted bootstrap history that did not start at nil")
 	}
 }
