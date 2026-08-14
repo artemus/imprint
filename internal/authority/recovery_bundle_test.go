@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -53,6 +54,52 @@ func TestVerifyRecoveryBundleRejectsAnotherLedgerHead(t *testing.T) {
 	now := time.Date(2026, 8, 14, 12, 30, 0, 0, time.UTC)
 	if _, err = VerifyRecoveryBundle(canonicalRecoveryBundle(t, bundle), now, false); err == nil {
 		t.Fatal("accepted manifest naming another ledger head")
+	}
+}
+
+func TestBuildRecoveryBundleMatchesCanonicalFixture(t *testing.T) {
+	expected, bundle := recoveryBundleFixture(t)
+	var manifest RecoveryManifest
+	if err := json.Unmarshal(bundle.Manifest, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	_, rows, err := decodePortableLedger(bundle.Ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := make([]Checkpoint, len(manifest.CheckpointHistory))
+	for index, raw := range manifest.CheckpointHistory {
+		if history[index], err = decodeCheckpoint(raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	creation, err := decodeCheckpoint(manifest.CreationCheckpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, _ := base64.StdEncoding.DecodeString(bundle.EncryptedRecoveryKeyB64)
+	artifact, err := BuildRecoveryBundle(rows, encrypted, RecoveryBundleMetadata{
+		CreatedAt: manifest.CreatedAt,
+		Recovery: KeyCertificate{
+			KeyID: manifest.RecoveryKeyID, PublicKeyB64: manifest.RecoveryPublicKeyB64,
+			PublicKeyFingerprint: manifest.RecoveryPublicKeyFingerprint, InstallID: manifest.RecoveryInstallID,
+		},
+		SignerKeyID: manifest.SignerKeyID, CheckpointHistory: history,
+		CreationCheckpoint: creation,
+	}, fixturePrivateKey(0), time.Date(2026, 8, 14, 12, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(artifact.Bytes, expected) || artifact.BundleSHA256 == "" || artifact.Manifest.LedgerSHA256 != manifest.LedgerSHA256 {
+		t.Fatalf("artifact=%#v", artifact)
+	}
+	if _, err := BuildRecoveryBundle(rows, encrypted, RecoveryBundleMetadata{
+		CreatedAt: manifest.CreatedAt, Recovery: KeyCertificate{
+			KeyID: manifest.RecoveryKeyID, PublicKeyB64: manifest.RecoveryPublicKeyB64,
+			PublicKeyFingerprint: manifest.RecoveryPublicKeyFingerprint, InstallID: manifest.RecoveryInstallID,
+		}, SignerKeyID: manifest.SignerKeyID, CheckpointHistory: history, CreationCheckpoint: creation,
+	}, fixturePrivateKey(1), time.Date(2026, 8, 14, 12, 30, 0, 0, time.UTC)); err == nil {
+		t.Fatal("built a recovery bundle with a mismatched signer")
 	}
 }
 

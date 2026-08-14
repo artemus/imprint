@@ -52,8 +52,109 @@ type VerifiedRecoveryBundle struct {
 	Chain                VerifiedChain
 }
 
+type RecoveryBundleMetadata struct {
+	CreatedAt          string
+	Recovery           KeyCertificate
+	SignerKeyID        string
+	CheckpointHistory  []Checkpoint
+	CreationCheckpoint Checkpoint
+}
+
+type RecoveryBundleArtifact struct {
+	Bytes        []byte
+	Manifest     RecoveryManifest
+	BundleSHA256 string
+}
+
 var recoveryBundleFields = []string{"bundle_version", "manifest", "ledger", "encrypted_recovery_key_b64", "signature_b64"}
 var recoveryManifestFields = []string{"manifest_version", "operator_id", "store_identity", "created_at", "recovery_key_id", "recovery_public_key_b64", "recovery_public_key_fingerprint", "recovery_install_id", "ledger_sequence", "ledger_head_sha256", "ledger_sha256", "authority_ledger_genesis_sha256", "encrypted_recovery_key_sha256", "signer_key_id", "signer_install_id", "checkpoint_history", "creation_checkpoint"}
+
+// BuildRecoveryBundle constructs and self-verifies the canonical offline
+// artifact without publishing it.
+func BuildRecoveryBundle(rows []LedgerRow, encryptedRecoveryKey []byte, metadata RecoveryBundleMetadata, signerPrivateKey ed25519.PrivateKey, now time.Time) (RecoveryBundleArtifact, error) {
+	if len(rows) == 0 {
+		return RecoveryBundleArtifact{}, errors.New("authority ledger is absent")
+	}
+	chain, err := VerifyChain(rows, rows[0].OperatorID, "")
+	if err != nil {
+		return RecoveryBundleArtifact{}, err
+	}
+	if _, err := utcTimestamp(metadata.CreatedAt); err != nil {
+		return RecoveryBundleArtifact{}, err
+	}
+	recovery, recoveryExists := chain.Keys[metadata.Recovery.KeyID]
+	if !recoveryExists || recovery.Kind != "recovery" || recovery.Status != "active" || recovery.KeyCertificate != metadata.Recovery {
+		return RecoveryBundleArtifact{}, errors.New("recovery key is absent or inactive")
+	}
+	signer, signerExists := chain.Keys[metadata.SignerKeyID]
+	if !signerExists || signer.Kind != "installation" || signer.Status != "active" {
+		return RecoveryBundleArtifact{}, errors.New("recovery manifest signer is not active and paired")
+	}
+	portable := make([]PortableLedgerRow, len(rows))
+	ledgerRaw := make([]json.RawMessage, len(rows))
+	for index, row := range rows {
+		portable[index] = portableRow(row)
+		encoded, encodeErr := canonicalContract(portable[index])
+		if encodeErr != nil {
+			return RecoveryBundleArtifact{}, encodeErr
+		}
+		ledgerRaw[index] = encoded
+	}
+	ledgerSHA, err := LedgerSHA256(portable)
+	if err != nil {
+		return RecoveryBundleArtifact{}, err
+	}
+	history := make([]json.RawMessage, len(metadata.CheckpointHistory))
+	for index, checkpoint := range metadata.CheckpointHistory {
+		encoded, encodeErr := canonicalContract(checkpoint)
+		if encodeErr != nil {
+			return RecoveryBundleArtifact{}, encodeErr
+		}
+		history[index] = encoded
+	}
+	if _, err := VerifyCheckpointHistory(chain, history, nil, now); err != nil {
+		return RecoveryBundleArtifact{}, err
+	}
+	creationRaw, err := canonicalContract(metadata.CreationCheckpoint)
+	if err != nil || len(history) == 0 || !bytes.Equal(history[len(history)-1], creationRaw) {
+		return RecoveryBundleArtifact{}, errors.New("recovery manifest checkpoint history is absent or inconsistent")
+	}
+	manifest := RecoveryManifest{
+		ManifestVersion: RecoveryManifestVersion, OperatorID: chain.OperatorID,
+		StoreIdentity: chain.StoreIdentity, CreatedAt: metadata.CreatedAt,
+		RecoveryKeyID: metadata.Recovery.KeyID, RecoveryPublicKeyB64: metadata.Recovery.PublicKeyB64,
+		RecoveryPublicKeyFingerprint: metadata.Recovery.PublicKeyFingerprint,
+		RecoveryInstallID:            metadata.Recovery.InstallID,
+		LedgerSequence:               chain.HeadSequence, LedgerHeadSHA256: chain.HeadSHA256,
+		LedgerSHA256: ledgerSHA, AuthorityLedgerGenesisSHA256: chain.GenesisSHA256,
+		EncryptedRecoveryKeySHA256: recoveryEncryptedDigest(encryptedRecoveryKey),
+		SignerKeyID:                metadata.SignerKeyID, SignerInstallID: signer.InstallID,
+		CheckpointHistory: history, CreationCheckpoint: creationRaw,
+	}
+	manifestRaw, err := canonicalContract(manifest)
+	if err != nil {
+		return RecoveryBundleArtifact{}, err
+	}
+	signature, err := recoverySignature(signerPrivateKey, manifest)
+	if err != nil {
+		return RecoveryBundleArtifact{}, err
+	}
+	bundle := recoveryBundle{
+		BundleVersion: RecoveryBundleVersion, Manifest: manifestRaw, Ledger: ledgerRaw,
+		EncryptedRecoveryKeyB64: base64.StdEncoding.EncodeToString(encryptedRecoveryKey),
+		SignatureB64:            signature,
+	}
+	encoded, err := canonicalContract(bundle)
+	if err != nil {
+		return RecoveryBundleArtifact{}, err
+	}
+	encoded = append(encoded, '\n')
+	if _, err := VerifyRecoveryBundle(encoded, now, true); err != nil {
+		return RecoveryBundleArtifact{}, err
+	}
+	digest := sha256.Sum256(encoded)
+	return RecoveryBundleArtifact{Bytes: encoded, Manifest: manifest, BundleSHA256: hex.EncodeToString(digest[:])}, nil
+}
 
 // VerifyRecoveryBundle verifies the canonical signed artifact without exposing
 // or decrypting its embedded private key.
