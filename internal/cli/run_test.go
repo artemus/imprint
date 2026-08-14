@@ -157,6 +157,62 @@ func TestRepeatedStopFailureDoesNotLoop(t *testing.T) {
 	}
 }
 
+func TestReadHooksDeliverOnceRefreshAndSelectDomain(t *testing.T) {
+	temporary, _ := filepath.EvalSymlinks(t.TempDir())
+	configPath := filepath.Join(temporary, "config.json")
+	dataRoot := filepath.Join(temporary, "data")
+	configuration := map[string]any{
+		"data_root":     dataRoot,
+		"operator_slug": "read-hooks",
+		"domains": []map[string]any{{
+			"domain_id": "research", "public_label": "Research",
+			"safe_paths": []string{"Projects/Research"}, "keywords": []string{"sources"},
+		}},
+	}
+	raw, _ := json.Marshal(configuration)
+	if err := os.WriteFile(configPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runHook := func(action, event string) map[string]any {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if code := Run([]string{"--config", configPath, "hook", action}, strings.NewReader(event), &stdout, &stderr); code != 0 {
+			t.Fatalf("%s code=%d stdout=%s stderr=%s", action, code, stdout.String(), stderr.String())
+		}
+		var response map[string]any
+		if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+			t.Fatalf("%s invalid response %q: %v", action, stdout.String(), err)
+		}
+		return response
+	}
+
+	sessionEvent := `{"hook_event_name":"SessionStart","session_id":"native-read-session"}`
+	if response := runHook("session-start", sessionEvent); response["status"] != "delivered" {
+		t.Fatalf("first session response=%#v", response)
+	}
+	if response := runHook("session-start", sessionEvent); response["status"] != "already_delivered" {
+		t.Fatalf("repeat session response=%#v", response)
+	}
+	compactEvent := `{"hook_event_name":"SessionStart","session_id":"native-read-session","source":"compact"}`
+	if response := runHook("session-start", compactEvent); response["status"] != "delivered" {
+		t.Fatalf("compact session response=%#v", response)
+	}
+
+	domainEvent := `{"hook_event_name":"UserPromptSubmit","session_id":"native-domain-session","cwd":"Projects/Research/Now","prompt":"Review these sources"}`
+	response := runHook("user-prompt-submit", domainEvent)
+	if response["status"] != "delivered" || response["domain_id"] != "research" || response["selection_method"] != "path" {
+		t.Fatalf("domain response=%#v", response)
+	}
+	if response := runHook("user-prompt-submit", domainEvent); response["status"] != "already_delivered" {
+		t.Fatalf("repeat domain response=%#v", response)
+	}
+	unmatched := `{"hook_event_name":"UserPromptSubmit","session_id":"native-unmatched-session","cwd":"Projects/Other","prompt":"Unrelated work"}`
+	if response := runHook("user-prompt-submit", unmatched); response["status"] != "skipped" || response["reason"] != "domain_no_match" {
+		t.Fatalf("unmatched response=%#v", response)
+	}
+}
+
 func TestStopHookMinesTranscript(t *testing.T) {
 	temporary, _ := filepath.EvalSymlinks(t.TempDir())
 	configPath := filepath.Join(temporary, "config.json")

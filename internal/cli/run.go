@@ -17,6 +17,7 @@ import (
 	"github.com/artemus/imprint/internal/capture"
 	"github.com/artemus/imprint/internal/compiler"
 	"github.com/artemus/imprint/internal/config"
+	"github.com/artemus/imprint/internal/domain"
 	"github.com/artemus/imprint/internal/identity"
 	"github.com/artemus/imprint/internal/paths"
 	"github.com/artemus/imprint/internal/retrieve"
@@ -247,31 +248,51 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, string(response))
 		return 0
 	case "hook":
-		if len(args) != 2 || args[1] != "stop-capture" {
-			return fail(stderr, "native hook currently requires stop-capture")
+		if len(args) != 2 || (args[1] != "stop-capture" && args[1] != "session-start" && args[1] != "user-prompt-submit" && args[1] != "health-check") {
+			return fail(stderr, "unsupported native hook action")
 		}
+		action := args[1]
 		var event map[string]any
 		decoder := json.NewDecoder(stdin)
 		if err := decoder.Decode(&event); err != nil {
+			if action != "stop-capture" {
+				return readHookFailure(stdout, action, "hook_input_invalid")
+			}
 			return hookFailure(stdout, stderr, "hook_input_invalid", false, true)
 		}
 		stopActive, _ := event["stop_hook_active"].(bool)
 		if schema, ok := event["hook_schema_version"]; ok && schema != "1.0.0" {
+			if action != "stop-capture" {
+				return readHookFailure(stdout, action, "unsupported_hook_schema_version")
+			}
 			return hookFailure(stdout, stderr, "unsupported hook_schema_version", stopActive, true)
 		}
-		if name, ok := event["hook_event_name"]; ok && name != "Stop" {
+		expectedName := map[string]string{"stop-capture": "Stop", "session-start": "SessionStart", "user-prompt-submit": "UserPromptSubmit", "health-check": "SessionStart"}[action]
+		if name, ok := event["hook_event_name"]; ok && name != expectedName {
+			if action != "stop-capture" {
+				return readHookFailure(stdout, action, "hook_event_name_invalid")
+			}
 			return hookFailure(stdout, stderr, "hook_event_name_invalid", stopActive, true)
 		}
 		value, err := config.Load(configPath)
 		if err != nil {
+			if action != "stop-capture" {
+				return readHookFailure(stdout, action, "hook_runtime_failed")
+			}
 			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
 		}
 		root, err := paths.OperatorRoot(value)
 		if err != nil {
+			if action != "stop-capture" {
+				return readHookFailure(stdout, action, "hook_runtime_failed")
+			}
 			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
 		}
 		operatorID, err := identity.LoadOrCreate(root)
 		if err != nil {
+			if action != "stop-capture" {
+				return readHookFailure(stdout, action, "hook_runtime_failed")
+			}
 			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
 		}
 		nativeSession, ok := stringField(event, "session_id", "sessionId")
@@ -280,7 +301,13 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		sessionID, err := session.OpaqueURN(root, nativeSession)
 		if err != nil {
+			if action != "stop-capture" {
+				return readHookFailure(stdout, action, "hook_runtime_failed")
+			}
 			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
+		}
+		if action != "stop-capture" {
+			return runReadHook(action, event, value, root, operatorID, sessionID, stdout)
 		}
 		operatorText, ok := stringField(event, "operator_text", "last_user_message")
 		priorAssistant, _ := stringField(event, "prior_assistant_output")
@@ -488,6 +515,128 @@ func hookFailure(stdout, stderr io.Writer, message string, stopActive, captureLo
 		return 2
 	}
 	return 0
+}
+func readHookFailure(stdout io.Writer, action, message string) int {
+	eventName := map[string]string{"session-start": "SessionStart", "user-prompt-submit": "UserPromptSubmit", "health-check": "SessionStart"}[action]
+	body := map[string]any{"hook_schema_version": "1.0.0", "status": "degraded", "error": message, "hook_action": action, "failure_policy": "fail_open", "hookSpecificOutput": map[string]any{"hookEventName": eventName, "additionalContext": ""}}
+	encoded, _ := canonical.JSON(body)
+	fmt.Fprintln(stdout, string(encoded))
+	return 0
+}
+
+func runReadHook(action string, event map[string]any, value config.Config, root, operatorID, sessionID string, stdout io.Writer) int {
+	if action == "health-check" {
+		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+		if err != nil {
+			return readHookFailure(stdout, action, "hook_runtime_failed")
+		}
+		defer database.Close()
+		integrity, err := database.Integrity(context.Background())
+		status := "healthy"
+		if err != nil || integrity != "ok" {
+			status = "degraded"
+		}
+		body := map[string]any{"hook_schema_version": "1.0.0", "status": status, "store": "compatible", "integrity": integrity}
+		encoded, _ := canonical.JSON(body)
+		fmt.Fprintln(stdout, string(encoded))
+		if status != "healthy" {
+			return 2
+		}
+		return 0
+	}
+	if action == "session-start" {
+		source, _ := stringField(event, "source")
+		refresh := source == "compact" || source == "resume"
+		response, snapshot, scope, prepared, err := hookRetrieve(root, operatorID, value, sessionID, "", "", false, refresh)
+		if err != nil {
+			return readHookFailure(stdout, action, "hook_runtime_failed")
+		}
+		body := map[string]any{"hook_schema_version": "1.0.0", "status": response["status"], "hookSpecificOutput": map[string]any{"hookEventName": "SessionStart", "additionalContext": stringValue(response["payload"])}}
+		encoded, _ := canonical.JSON(body)
+		fmt.Fprintln(stdout, string(encoded))
+		if prepared {
+			_, _ = retrieve.Commit(root, retrieve.SafeSession(sessionID), snapshot, scope)
+		}
+		return 0
+	}
+	prompt, _ := stringField(event, "prompt", "user_prompt")
+	path, _ := stringField(event, "cwd", "working_directory")
+	explicit, _ := stringField(event, "domain_id")
+	selection := domain.Select(value.Domains, explicit, path, prompt)
+	if selection.ID == "" {
+		body := map[string]any{"hook_schema_version": "1.0.0", "status": "skipped", "reason": selection.Diagnostic, "hookSpecificOutput": map[string]any{"hookEventName": "UserPromptSubmit", "additionalContext": ""}}
+		encoded, _ := canonical.JSON(body)
+		fmt.Fprintln(stdout, string(encoded))
+		return 0
+	}
+	response, snapshot, scope, prepared, err := hookRetrieve(root, operatorID, value, sessionID, prompt, selection.ID, true, false)
+	if err != nil {
+		return readHookFailure(stdout, action, "hook_runtime_failed")
+	}
+	body := map[string]any{"hook_schema_version": "1.0.0", "status": response["status"], "domain_id": selection.ID, "selection_method": selection.Method, "hookSpecificOutput": map[string]any{"hookEventName": "UserPromptSubmit", "additionalContext": stringValue(response["payload"])}}
+	encoded, _ := canonical.JSON(body)
+	fmt.Fprintln(stdout, string(encoded))
+	if prepared {
+		_, _ = retrieve.Commit(root, retrieve.SafeSession(sessionID), snapshot, scope)
+	}
+	return 0
+}
+
+func hookRetrieve(root, operatorID string, value config.Config, sessionID, prompt, selectedDomain string, domainOnly, refresh bool) (map[string]any, string, string, bool, error) {
+	database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	defer database.Close()
+	records, snapshot, err := retrieve.FromStore(context.Background(), database)
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	if domainOnly {
+		filtered := records[:0]
+		for _, record := range records {
+			if record.Section == "domain" {
+				filtered = append(filtered, record)
+			}
+		}
+		records = filtered
+	}
+	scope := ""
+	if domainOnly {
+		scope = selectedDomain
+	}
+	safeSession := retrieve.SafeSession(sessionID)
+	if !refresh {
+		cached, delivered, err := retrieve.Existing(root, safeSession, snapshot, scope)
+		if err != nil {
+			return nil, "", "", false, err
+		}
+		if delivered {
+			return map[string]any{"status": "already_delivered", "snapshot_id": snapshot, "payload": "", "selected_ids": []string{}}, snapshot, scope, false, nil
+		}
+		if cached != nil {
+			return cached, snapshot, scope, true, nil
+		}
+	}
+	result, err := retrieve.Retrieve(records, prompt, selectedDomain, nil, retrieve.Config{Budget: value.ContextBudgetBytes, AllowHigher: value.AllowHigherBudget, AuthorityMode: "authoritative", OutputFormat: "compact"})
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	response := map[string]any{"status": "delivered", "snapshot_id": snapshot, "payload": string(result.Payload), "selected_ids": result.SelectedIDs, "selected_bytes": result.SelectedBytes, "budget_bytes": result.BudgetBytes, "eligible_count": result.EligibleCount, "omitted_count": result.OmittedCount, "section_bytes": result.SectionBytes, "tokenizer_version": result.TokenizerVersion, "authority_mode": result.AuthorityMode, "requested_partitions": result.RequestedPartitions, "selected_by_partition": result.SelectedByPartition, "receipt_scope": nil}
+	if scope != "" {
+		response["receipt_scope"] = scope
+	}
+	if refresh {
+		return response, snapshot, scope, false, nil
+	}
+	prepared, err := retrieve.Prepare(root, safeSession, snapshot, scope, response)
+	return prepared, snapshot, scope, err == nil, err
+}
+func stringValue(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 func stringField(value map[string]any, names ...string) (string, bool) {
 	for _, name := range names {
