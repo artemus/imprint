@@ -129,6 +129,67 @@ func TestCreateAuthorityCheckpointBlockedByRecoveryJournal(t *testing.T) {
 	}
 }
 
+func TestReconcileAuthorityKeysQuarantinesOnlyUnreferencedFiles(t *testing.T) {
+	root, database, event, _ := enrolledStoreFixture(t)
+	defer database.Close()
+	orphan := filepath.Join(root, "authority", "keys", "unreferenced.blob")
+	if err := os.WriteFile(orphan, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := database.ReconcileAuthorityKeys(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.QuarantinedOrphans != 1 || result.ActiveBindings != 1 {
+		t.Fatalf("result=%#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(event.BlobRelativePath))); err != nil {
+		t.Fatal("referenced key was moved:", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan remained active: %v", err)
+	}
+	quarantined, err := filepath.Glob(filepath.Join(root, "authority", "quarantine", "orphan-*.blob"))
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined=%v err=%v", quarantined, err)
+	}
+}
+
+func TestReconcileAuthorityKeysFailsBeforeMovingOrphansOnCommittedCorruption(t *testing.T) {
+	root, database, _, _ := enrolledStoreFixture(t)
+	defer database.Close()
+	orphan := filepath.Join(root, "authority", "keys", "unreferenced.blob")
+	if err := os.WriteFile(orphan, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.Exec(`UPDATE authority_keys SET blob_sha256=?`, strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ReconcileAuthorityKeys(context.Background(), root); err == nil || !strings.Contains(err.Error(), "materialization disagrees") {
+		t.Fatalf("err=%v", err)
+	}
+	if raw, err := os.ReadFile(orphan); err != nil || string(raw) != "orphan" {
+		t.Fatalf("orphan moved before corruption was reported: %q err=%v", raw, err)
+	}
+}
+
+func enrolledStoreFixture(t *testing.T) (string, *Store, authority.GenesisEvent, time.Time) {
+	t.Helper()
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	operator, _ := urn.New("operator")
+	database, err := Open(filepath.Join(root, "imprint.db"), operator, "primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, privateKey, blob := storeEnrollmentFixture(t, database, operator)
+	now := time.Date(2026, 8, 14, 12, 15, 0, 0, time.UTC)
+	if _, err := database.EnrollAuthority(context.Background(), root, event, privateKey, blob, now); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	return root, database, event, now
+}
+
 func mustStoreChain(t *testing.T, database *Store, operator string) authority.VerifiedChain {
 	t.Helper()
 	tx, err := database.db.BeginTx(context.Background(), nil)

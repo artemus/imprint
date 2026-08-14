@@ -17,11 +17,12 @@ import (
 )
 
 type localAuthorityKey struct {
-	operatorID, installID, storeIdentity         string
-	keyID, publicKeyB64, publicKeyFingerprint    string
-	blobRelativePath, blobSHA256, algorithmSuite string
-	enrollmentNonce, createdAt                   string
-	ledgerSequence, blobSize                     int64
+	operatorID, installID, storeIdentity      string
+	keyID, publicKeyB64, publicKeyFingerprint string
+	status, blobRelativePath, blobSHA256      string
+	algorithmSuite                            string
+	enrollmentNonce, createdAt                string
+	ledgerSequence, blobSize                  int64
 }
 
 func (s *Store) CreateAuthorityCheckpoint(ctx context.Context, dataRoot, passphrase string, now time.Time, ttl time.Duration) (result authority.Checkpoint, returned error) {
@@ -29,12 +30,8 @@ func (s *Store) CreateAuthorityCheckpoint(ctx context.Context, dataRoot, passphr
 	if err != nil {
 		return result, err
 	}
-	journal, err := authority.LoadRecoveryPublicationJournal(root)
-	if err != nil {
+	if _, err := s.ReconcileAuthorityKeys(ctx, root); err != nil {
 		return result, err
-	}
-	if journal != nil {
-		return result, errors.New("unfinished recovery publication requires native reconciliation; retained destination=" + journal.Destination)
 	}
 	var privateKey ed25519.PrivateKey
 	defer func() { clear(privateKey) }()
@@ -98,9 +95,9 @@ func (s *Store) ownedAuthorityDataRoot(dataRoot string) (string, error) {
 func loadLocalAuthorityKey(ctx context.Context, tx *sql.Tx, expectedOperatorID string) (localAuthorityKey, error) {
 	var binding localAuthorityKey
 	var activeCount int
-	err := tx.QueryRowContext(ctx, `SELECT operator_id,install_id,store_identity,key_id,public_key_b64,public_key_fingerprint,blob_rel_path,blob_sha256,algorithm_suite,enrollment_nonce,created_at,ledger_sequence,blob_size,(SELECT COUNT(*) FROM authority_keys WHERE status='active') FROM authority_keys WHERE status='active' ORDER BY ledger_sequence DESC LIMIT 1`).Scan(
+	err := tx.QueryRowContext(ctx, `SELECT operator_id,install_id,store_identity,key_id,public_key_b64,public_key_fingerprint,status,blob_rel_path,blob_sha256,algorithm_suite,enrollment_nonce,created_at,ledger_sequence,blob_size,(SELECT COUNT(*) FROM authority_keys WHERE status='active') FROM authority_keys WHERE status='active' ORDER BY ledger_sequence DESC LIMIT 1`).Scan(
 		&binding.operatorID, &binding.installID, &binding.storeIdentity, &binding.keyID,
-		&binding.publicKeyB64, &binding.publicKeyFingerprint, &binding.blobRelativePath,
+		&binding.publicKeyB64, &binding.publicKeyFingerprint, &binding.status, &binding.blobRelativePath,
 		&binding.blobSHA256, &binding.algorithmSuite, &binding.enrollmentNonce,
 		&binding.createdAt, &binding.ledgerSequence, &binding.blobSize, &activeCount,
 	)
