@@ -110,7 +110,11 @@ func CanonicalChallenge(challenge Challenge) ([]byte, error) {
 	if err := challenge.Validate(); err != nil {
 		return nil, err
 	}
-	encoded, err := canonical.JSON(challenge)
+	return canonicalContract(challenge)
+}
+
+func canonicalContract(value any) ([]byte, error) {
+	encoded, err := canonical.JSON(value)
 	if err != nil {
 		return nil, errors.New("E_AUTH_CANONICALIZATION")
 	}
