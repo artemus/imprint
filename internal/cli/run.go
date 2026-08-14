@@ -233,8 +233,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				return fail(stderr, err.Error())
 			}
 			return runAuthorityCheckpoint(context.Background(), configPath, ttl, stdin, stdout, stderr, ceremony.NativeConsole{}, time.Now().UTC())
+		} else if len(args) == 4 && args[1] == "transport" && args[2] == "--output" && strings.TrimSpace(args[3]) != "" {
+			return runAuthorityTransport(context.Background(), configPath, args[3], stdin, stdout, stderr, ceremony.NativeConsole{}, time.Now().UTC())
 		} else if len(args) != 2 || args[1] != "enroll" {
-			return fail(stderr, "authority requires enroll, checkpoint, or recovery-reconcile")
+			return fail(stderr, "authority requires enroll, checkpoint, transport --output PATH, or recovery-reconcile")
 		}
 		return runAuthorityEnrollment(context.Background(), configPath, recoveryDestination, stdin, stdout, stderr, ceremony.NativeConsole{}, time.Now().UTC(), rand.Reader)
 	case "whoami":

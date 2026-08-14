@@ -13,9 +13,17 @@ type rowQueryer interface {
 // before returning any derived authority state. Both *sql.DB and *sql.Tx satisfy
 // rowQueryer, so callers can bind verification to an authority transaction.
 func LoadVerifiedChain(ctx context.Context, queryer rowQueryer, expectedOperatorID, expectedStoreIdentity string) (VerifiedChain, error) {
-	rows, err := queryer.QueryContext(ctx, `SELECT sequence,event_id,event_type,operator_id,install_id,key_id,event_json,event_sha256,signature_b64,previous_event_sha256,created_at FROM authority_ledger ORDER BY sequence`)
+	ledger, err := LoadLedgerRows(ctx, queryer)
 	if err != nil {
 		return VerifiedChain{}, err
+	}
+	return VerifyChain(ledger, expectedOperatorID, expectedStoreIdentity)
+}
+
+func LoadLedgerRows(ctx context.Context, queryer rowQueryer) ([]LedgerRow, error) {
+	rows, err := queryer.QueryContext(ctx, `SELECT sequence,event_id,event_type,operator_id,install_id,key_id,event_json,event_sha256,signature_b64,previous_event_sha256,created_at FROM authority_ledger ORDER BY sequence`)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 	ledger := []LedgerRow{}
@@ -27,7 +35,7 @@ func LoadVerifiedChain(ctx context.Context, queryer rowQueryer, expectedOperator
 			&row.InstallID, &row.KeyID, &row.EventJSON, &row.EventSHA256,
 			&row.SignatureB64, &previous, &row.CreatedAt,
 		); err != nil {
-			return VerifiedChain{}, err
+			return nil, err
 		}
 		if previous.Valid {
 			row.PreviousEventSHA256 = &previous.String
@@ -35,7 +43,7 @@ func LoadVerifiedChain(ctx context.Context, queryer rowQueryer, expectedOperator
 		ledger = append(ledger, row)
 	}
 	if err := rows.Err(); err != nil {
-		return VerifiedChain{}, err
+		return nil, err
 	}
-	return VerifyChain(ledger, expectedOperatorID, expectedStoreIdentity)
+	return ledger, nil
 }

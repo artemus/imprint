@@ -33,7 +33,7 @@ func TestUnknownCommand(t *testing.T) {
 }
 
 func TestAuthorityEnrollmentIsPublicButRequiresNativeTerminal(t *testing.T) {
-	for _, arguments := range [][]string{{"authority", "enroll"}, {"authority", "enroll", "--recovery-output", "/offline/recovery.json"}, {"authority", "checkpoint"}, {"authority", "checkpoint", "--ttl-seconds", "3600"}, {"authority", "recovery-reconcile"}} {
+	for _, arguments := range [][]string{{"authority", "enroll"}, {"authority", "enroll", "--recovery-output", "/offline/recovery.json"}, {"authority", "checkpoint"}, {"authority", "checkpoint", "--ttl-seconds", "3600"}, {"authority", "transport", "--output", "/offline/transport.json"}, {"authority", "recovery-reconcile"}} {
 		var stdout, stderr bytes.Buffer
 		if code := Run(arguments, strings.NewReader(""), &stdout, &stderr); code != 2 {
 			t.Fatalf("%v code=%d", arguments, code)
@@ -49,7 +49,7 @@ func TestAuthorityEnrollmentRejectsIncompleteOptions(t *testing.T) {
 	if code := Run([]string{"authority", "enroll", "--recovery-output"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
 		t.Fatalf("code=%d", code)
 	}
-	if !strings.Contains(stderr.String(), "authority requires enroll, checkpoint, or recovery-reconcile") {
+	if !strings.Contains(stderr.String(), "authority requires enroll, checkpoint, transport --output PATH, or recovery-reconcile") {
 		t.Fatalf("stderr=%s", stderr.String())
 	}
 }

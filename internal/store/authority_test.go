@@ -173,6 +173,31 @@ func TestReconcileAuthorityKeysFailsBeforeMovingOrphansOnCommittedCorruption(t *
 	}
 }
 
+func TestBuildAuthorityTransportUsesPinnedCheckpointHistory(t *testing.T) {
+	root, database, _, now := enrolledStoreFixture(t)
+	defer database.Close()
+	checkpoint, err := database.CreateAuthorityCheckpoint(context.Background(), root, "fixture-passphrase", now.Add(time.Minute), authority.MaxCheckpointAge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := database.BuildAuthorityTransport(context.Background(), checkpoint, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := authority.VerifyAuthorityTransport(artifact.Bytes, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(verified.Transport.CheckpointHistory) != 2 || verified.Checkpoint.CheckpointSHA256 == "" || artifact.SHA256 == "" {
+		t.Fatalf("artifact=%#v verified=%#v", artifact, verified)
+	}
+	stale := checkpoint
+	stale.SignatureB64 = strings.Repeat("A", 88)
+	if _, err := database.BuildAuthorityTransport(context.Background(), stale, now.Add(time.Minute)); err == nil {
+		t.Fatal("built transport from a checkpoint other than the local pin")
+	}
+}
+
 func enrolledStoreFixture(t *testing.T) (string, *Store, authority.GenesisEvent, time.Time) {
 	t.Helper()
 	root, _ := filepath.EvalSymlinks(t.TempDir())

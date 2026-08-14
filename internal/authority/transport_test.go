@@ -2,6 +2,8 @@ package authority
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -98,6 +100,21 @@ func TestBuildAuthorityTransportProducesCanonicalSelfVerifiedArtifact(t *testing
 	}
 	if _, err := BuildAuthorityTransport([]LedgerRow{row}, []Checkpoint{checkpoint}, Checkpoint{}, now); err == nil {
 		t.Fatal("built transport whose latest checkpoint disagreed with history")
+	}
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	destination := filepath.Join(root, "offline", "transport.json")
+	published, err := PublishAuthorityTransport(destination, artifact, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published.Path != destination || published.TransportSHA256 != artifact.SHA256 {
+		t.Fatalf("published=%#v", published)
+	}
+	if raw, err := os.ReadFile(destination); err != nil || string(raw) != string(artifact.Bytes) {
+		t.Fatalf("raw mismatch err=%v", err)
+	}
+	if _, err := PublishAuthorityTransport(destination, artifact, now); err == nil {
+		t.Fatal("overwrote an existing authority transport")
 	}
 }
 

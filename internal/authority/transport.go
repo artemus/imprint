@@ -6,7 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/artemus/imprint/internal/privateio"
 )
 
 const TransportVersion = "imprint.authority.transport/1.0.0"
@@ -47,6 +51,11 @@ type AuthorityTransportArtifact struct {
 	Bytes     []byte
 	Transport AuthorityTransport
 	SHA256    string
+}
+
+type PublishedAuthorityTransport struct {
+	Path, TransportSHA256 string
+	Checkpoint            Checkpoint
 }
 
 var transportFields = []string{"transport_version", "operator_id", "store_identity", "authority_ledger_genesis_sha256", "ledger", "ledger_sha256", "checkpoint_history", "checkpoint"}
@@ -104,6 +113,37 @@ func BuildAuthorityTransport(rows []LedgerRow, history []Checkpoint, checkpoint 
 	}
 	digest := sha256.Sum256(encoded)
 	return AuthorityTransportArtifact{Bytes: encoded, Transport: transport, SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func PublishAuthorityTransport(destination string, artifact AuthorityTransportArtifact, now time.Time) (PublishedAuthorityTransport, error) {
+	absolute, err := filepath.Abs(destination)
+	if err != nil || len(artifact.Bytes) == 0 || !lowercaseSHA256.MatchString(artifact.SHA256) {
+		return PublishedAuthorityTransport{}, errors.New("authority transport publication is invalid")
+	}
+	digest := sha256.Sum256(artifact.Bytes)
+	if hex.EncodeToString(digest[:]) != artifact.SHA256 {
+		return PublishedAuthorityTransport{}, errors.New("authority transport publication digest mismatch")
+	}
+	verified, err := VerifyAuthorityTransport(artifact.Bytes, now)
+	if err != nil {
+		return PublishedAuthorityTransport{}, err
+	}
+	if err := privateio.PublishNew(absolute, artifact.Bytes); err != nil {
+		return PublishedAuthorityTransport{}, err
+	}
+	info, err := os.Lstat(absolute)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return PublishedAuthorityTransport{}, errors.New("published authority transport is not a regular file")
+	}
+	raw, err := os.ReadFile(absolute)
+	if err != nil || !bytes.Equal(raw, artifact.Bytes) {
+		return PublishedAuthorityTransport{}, errors.New("published authority transport failed verification")
+	}
+	checkpoint, err := DecodeCanonicalCheckpoint(verified.Transport.Checkpoint)
+	if err != nil {
+		return PublishedAuthorityTransport{}, err
+	}
+	return PublishedAuthorityTransport{Path: absolute, TransportSHA256: artifact.SHA256, Checkpoint: checkpoint}, nil
 }
 
 // VerifyAuthorityTransport verifies the canonical, newline-terminated public

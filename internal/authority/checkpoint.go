@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -66,6 +67,18 @@ var signerCertificateFields = []string{"certificate_version", "key_id", "install
 
 func CanonicalCheckpoint(checkpoint Checkpoint) ([]byte, error) {
 	return canonicalContract(checkpoint)
+}
+
+func DecodeCanonicalCheckpoint(raw []byte) (Checkpoint, error) {
+	checkpoint, err := decodeCheckpoint(raw)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	canonical, err := canonicalContract(checkpoint)
+	if err != nil || !bytes.Equal(canonical, raw) {
+		return Checkpoint{}, errors.New("authority checkpoint is not canonical")
+	}
+	return checkpoint, nil
 }
 
 // SignCheckpoint creates the Python-compatible checkpoint for the current
