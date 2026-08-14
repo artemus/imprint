@@ -11,6 +11,19 @@ permissions:
   contents: read
 
 jobs:
+  go-contract:
+    name: Go runtime contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build -trimpath ./cmd/imprint
+
   python-contract:
     name: Python ${{ matrix.python }} contract
     runs-on: ubuntu-latest
