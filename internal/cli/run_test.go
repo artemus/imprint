@@ -139,3 +139,33 @@ func TestRepeatedStopFailureDoesNotLoop(t *testing.T) {
 		t.Fatalf("stdout=%s", stdout.String())
 	}
 }
+
+func TestStopHookMinesTranscript(t *testing.T) {
+	temporary, _ := filepath.EvalSymlinks(t.TempDir())
+	configPath := filepath.Join(temporary, "config.json")
+	dataRoot := filepath.Join(temporary, "data")
+	if err := os.WriteFile(configPath, []byte(`{"data_root":"`+dataRoot+`","operator_slug":"transcript-test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(temporary, "transcript.jsonl")
+	transcriptRaw := "{\"type\":\"assistant\",\"message\":{\"content\":\"I omitted a source.\"}}\n{\"type\":\"user\",\"message\":{\"content\":\"No, explicitly report every failed source.\"}}\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptRaw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	event := `{"hook_event_name":"Stop","session_id":"native","transcript_path":"` + transcriptPath + `"}`
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--config", configPath, "hook", "stop-capture"}, strings.NewReader(event), &stdout, &stderr); code != 0 {
+		t.Fatalf("stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	spools, _ := filepath.Glob(filepath.Join(dataRoot, "transcript-test", "spool", "primary", "*.json"))
+	if len(spools) != 1 {
+		t.Fatalf("spools=%v", spools)
+	}
+	raw, err := os.ReadFile(spools[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "explicitly report every failed source") || !strings.Contains(string(raw), "I omitted a source") {
+		t.Fatalf("spool=%s", raw)
+	}
+}

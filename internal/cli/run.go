@@ -22,6 +22,7 @@ import (
 	"github.com/artemus/imprint/internal/session"
 	"github.com/artemus/imprint/internal/spool"
 	"github.com/artemus/imprint/internal/store"
+	"github.com/artemus/imprint/internal/transcript"
 )
 
 const usage = `Usage: imprint [--config PATH] COMMAND
@@ -280,20 +281,43 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return hookFailure(stdout, stderr, "hook_runtime_failed", stopActive, true)
 		}
 		operatorText, ok := stringField(event, "operator_text", "last_user_message")
+		priorAssistant, _ := stringField(event, "prior_assistant_output")
+		caseDescription, _ := stringField(event, "case_description")
+		contextualEvidence := []capture.EvidenceInput{}
+		extensions := map[string]capture.Extension{}
+		var degradation map[string]any
+		if !ok || strings.TrimSpace(operatorText) == "" {
+			if transcriptPath, hasPath := stringField(event, "transcript_path"); hasPath {
+				parsed, parseErr := transcript.Parse(transcriptPath)
+				if parseErr != nil {
+					return hookFailure(stdout, stderr, parseErr.Error(), stopActive, true)
+				}
+				operatorText = parsed.OperatorText
+				priorAssistant = parsed.PriorAssistant
+				caseDescription = parsed.CaseDescription
+				if priorAssistant != "" {
+					contextualEvidence = append(contextualEvidence, capture.EvidenceInput{Kind: "context", Content: priorAssistant, SourceLocator: parsed.SourceLocator})
+				}
+				if parsed.Degradation != nil {
+					payload, _ := json.Marshal(parsed.Degradation)
+					extensions["org.imprint.transcript"] = capture.Extension{SchemaVersion: "1.0.0", Payload: payload}
+					degradation = parsed.Degradation
+				}
+				ok = true
+			}
+		}
 		if !ok || strings.TrimSpace(operatorText) == "" {
 			response, _ := canonical.JSON(map[string]any{"hook_schema_version": "1.0.0", "status": "skipped", "reason": "feedback_text_unavailable"})
 			fmt.Fprintln(stdout, string(response))
 			return 0
 		}
 		priorOperator, _ := stringField(event, "prior_operator_text")
-		priorAssistant, _ := stringField(event, "prior_assistant_output")
 		detection := capture.Detect(operatorText, priorOperator, priorAssistant)
 		if !detection.IsFeedback {
 			response, _ := canonical.JSON(map[string]any{"hook_schema_version": "1.0.0", "status": "skipped", "reason": "not_explicit_feedback"})
 			fmt.Fprintln(stdout, string(response))
 			return 0
 		}
-		caseDescription, _ := stringField(event, "case_description")
 		if strings.TrimSpace(caseDescription) == "" {
 			caseDescription = "Explicit operator feedback witnessed by explicit hook input"
 		}
@@ -301,7 +325,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if text, ok := stringField(event, "reason"); ok {
 			reason = &text
 		}
-		envelope, err := capture.Build(capture.BuildOptions{OperatorID: operatorID, SessionID: sessionID, NodeID: value.NodeID, CaseDescription: caseDescription, RawOperatorText: operatorText, CallType: detection.CallType, CaptureMechanism: "claude_code_stop_hook", CapturedBy: "imprint-hook", Reason: reason})
+		envelope, err := capture.Build(capture.BuildOptions{OperatorID: operatorID, SessionID: sessionID, NodeID: value.NodeID, CaseDescription: caseDescription, RawOperatorText: operatorText, CallType: detection.CallType, CaptureMechanism: "claude_code_stop_hook", CapturedBy: "imprint-hook", Reason: reason, ContextualEvidence: contextualEvidence, Extensions: extensions})
 		if err != nil {
 			return hookFailure(stdout, stderr, "hook_action_failed", stopActive, true)
 		}
@@ -327,6 +351,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 					receipt["compile"] = counts
 				}
 			}
+		}
+		if degradation != nil {
+			receipt["degradation"] = degradation
 		}
 		response, _ := canonical.JSON(receipt)
 		fmt.Fprintln(stdout, string(response))
