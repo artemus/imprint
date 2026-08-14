@@ -23,6 +23,11 @@ jobs:
       - run: go test ./...
       - run: go vet ./...
       - run: go build -trimpath ./cmd/imprint
+      - name: Cross-compile native release targets
+        run: |
+          GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/imprint-linux-amd64 ./cmd/imprint
+          GOOS=darwin GOARCH=arm64 go build -trimpath -o /tmp/imprint-darwin-arm64 ./cmd/imprint
+          GOOS=windows GOARCH=amd64 go build -trimpath -o /tmp/imprint-windows-amd64.exe ./cmd/imprint
 
   python-contract:
     name: Python ${{ matrix.python }} contract

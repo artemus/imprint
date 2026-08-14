@@ -76,4 +76,15 @@ func TestCaptureQueuesCompatibleEnvelope(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries=%d", len(entries))
 	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"--config", configPath, "compile", "--once"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("compile code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"captured":1`) {
+		t.Fatalf("compile stdout=%s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(operatorRoot, "imprint.db")); err != nil {
+		t.Fatal(err)
+	}
 }

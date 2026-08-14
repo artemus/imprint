@@ -2,19 +2,23 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/artemus/imprint/internal/buildinfo"
 	"github.com/artemus/imprint/internal/canonical"
 	"github.com/artemus/imprint/internal/capture"
+	"github.com/artemus/imprint/internal/compiler"
 	"github.com/artemus/imprint/internal/config"
 	"github.com/artemus/imprint/internal/identity"
 	"github.com/artemus/imprint/internal/paths"
 	"github.com/artemus/imprint/internal/spool"
+	"github.com/artemus/imprint/internal/store"
 )
 
 const usage = `Usage: imprint [--config PATH] COMMAND
@@ -23,6 +27,7 @@ Commands:
   version   print version metadata
   config    validate and print resolved public configuration
   capture   validate and durably queue a raw capture envelope
+  compile   compile queued captures into canonical SQLite state
 `
 
 func Run(args []string, stdout, stderr io.Writer) int {
@@ -91,6 +96,43 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, err.Error())
 		}
 		fmt.Fprintln(stdout, string(response))
+		return 0
+	case "compile":
+		if len(args) != 2 || args[1] != "--once" {
+			return fail(stderr, "compile requires --once")
+		}
+		value, err := config.Load(configPath)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		if !value.Compiler {
+			return fail(stderr, "canonical mutation requires explicit compiler authority")
+		}
+		root, err := paths.OperatorRoot(value)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		operatorID, err := identity.LoadOrCreate(root)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		database, err := store.Open(filepath.Join(root, "imprint.db"), operatorID, value.NodeID)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		defer database.Close()
+		counts, err := compiler.Compile(context.Background(), root, database)
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		response, err := canonical.JSON(map[string]any{"status": "ok", "captured": counts.Captured, "duplicate": counts.Duplicate, "quarantined": counts.Quarantined})
+		if err != nil {
+			return fail(stderr, err.Error())
+		}
+		fmt.Fprintln(stdout, string(response))
+		if counts.Quarantined > 0 {
+			return 2
+		}
 		return 0
 	default:
 		return fail(stderr, fmt.Sprintf("unknown command %q", strings.TrimSpace(args[0])))
